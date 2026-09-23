@@ -13,18 +13,65 @@ Nothing below is implemented yet unless marked done. Last updated 2026-09-23.
     overflows. **Mount the transducer at least 30 cm above the highest level the
     water could physically reach** (the pit rim or floor level), using a short
     standpipe or bracket if needed.
-  - Powered from the SuperMini's 5V (USB) pin, with a shared ground.
-  - **Trig on GPIO 3**, wired directly (3.3 V is enough to trigger it).
-  - **Echo on GPIO 4** through a voltage divider, placed next to the ESP32:
-    Echo → R1 1 kΩ → GPIO 4, and GPIO 4 → R2 2 kΩ → GND (5 V × 2/3 ≈ 3.3 V;
-    2.2 kΩ / 3.3 kΩ ≈ 3.0 V also works). Some board versions output only 3.3 V on
-    Echo; measure it first, and if so wire Echo straight to GPIO 4.
-  - On v3.0 boards leave the mode resistor pad (R27) empty (Trig/Echo mode).
-  - Pins avoided: GPIO 2, 8 and 9 are boot strapping pins, and 5/6 are I2C.
+  - **Trig on GPIO 3, Echo on GPIO 4** (through a voltage divider). Wiring and
+    divider details are in [JSN-SR04T wiring](#jsn-sr04t-wiring) below.
 - **Temperature/humidity:** AHT20 on the existing I2C bus, 3.3 V, mounted outside
   the pit.
 - **No float switch for now.** It can be added later on a spare GPIO as an
   independent high-water check.
+
+### JSN-SR04T wiring
+
+The sensor runs on 5 V and its Echo output is 5 V, but ESP32-C3 pins take
+3.3 V at most. A two-resistor divider brings Echo down: Echo goes through R1
+to the GPIO, and R2 goes from that GPIO to ground.
+
+```
+  JSN-SR04T                                ESP32-C3 SuperMini
+  ---------                                ------------------
+   5V   ─────────────────────────────────── 5V  (USB 5 V pin)
+   GND  ─────────────────────────────────┬─ GND
+   Trig ─────────────────────────────────┼─ GPIO 3   (direct, no divider)
+                                         │
+   Echo ───[ R1 1 kΩ ]───┬───────────────┼─ GPIO 4
+                         │               │
+                      [ R2 2 kΩ ]        │
+                         │               │
+                         └───────────────┘  (to GND)
+```
+
+The GPIO sees 5 V × R2 / (R1 + R2) = 5 × 2 / 3 ≈ 3.3 V.
+
+| R1 (Echo side) | R2 (to GND) | GPIO sees |
+|---|---|---|
+| 1 kΩ | 2 kΩ (or two 1 kΩ in series) | 3.33 V |
+| 2.2 kΩ | 3.3 kΩ | 3.0 V |
+| 10 kΩ | 20 kΩ | 3.33 V |
+
+Any of these works: the ESP32 reads anything above about 2.5 V as HIGH, and
+2.2 kΩ / 3.3 kΩ leaves a little more margin below 3.3 V. Keep the resistors
+between about 1 kΩ and 20 kΩ; much higher and the Echo edges get sloppy.
+
+Notes:
+
+- **Trig needs no divider.** It goes from the ESP32 to the sensor, and 3.3 V is
+  enough to trigger it.
+- **Shared ground** between the sensor and the ESP32 is required, or the divider
+  reads garbage.
+- **Power from the SuperMini's 5V pin** (USB). The sensor isn't reliable on 3.3 V.
+- **Pins:** GPIO 2, 8 and 9 are boot strapping pins on the C3 and GPIO 5/6 are
+  the I2C bus, so they're avoided. GPIO 3/4 also leave GPIO 0-5 free for
+  deep-sleep wake later.
+- **Placement:** put the divider next to the ESP32, not at the sensor end. The
+  sensor's driver board sits near the ESP32; only the probe's own cable (about
+  2.5 m) runs into the pit.
+- **Board mode:** on v3.0 boards, leave the mode resistor pad (R27) empty. That's
+  the default Trig/Echo mode the firmware uses.
+- **Check before connecting GPIO 4:** power the sensor and measure the middle of
+  the divider with a meter. It should read 0 V at rest and never more than about
+  3.4 V. Some board versions output only 3.3 V on Echo, which the divider would
+  bring down to about 2.2 V, too close to the HIGH threshold. If Echo measures
+  3.3 V without the divider, wire it straight to GPIO 4 instead.
 
 ## Firmware
 
