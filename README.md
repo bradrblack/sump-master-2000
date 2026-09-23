@@ -10,7 +10,7 @@
 > - Level and temperature/humidity readings published every 10 minutes to Adafruit
 >   IO and on to InfluxDB via Telegraf, alongside the existing pump ON/OFF events.
 >
-> The sketch is `src/sm3k.ino`. These additions are in the design stage. The
+> The sketch is `src/sm2k.ino`. These additions are in the design stage. The
 > rest of this README describes the behavior inherited from vibration-monitor,
 > which is unchanged so far.
 

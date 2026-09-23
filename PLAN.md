@@ -145,8 +145,6 @@ All existing watchdogs (Wi-Fi, Adafruit IO, I2C sensor, 30 s task watchdog), the
 
 ## Housekeeping
 
-- The sketch file is `src/sm2k.ino`, but the README and CHANGELOG say
-  `src/sm3k.ino`. Settle on one name.
 - The README's "Notes and gotchas" still describes the esptool upload crash and
   the esptool 4.x workaround; the pinned platform (55.03.37) fixed that.
 

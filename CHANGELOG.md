@@ -1,7 +1,7 @@
 # Changelog
 
 Notable changes to the Sump Master 2000 firmware, newest first. Versions refer
-to `FIRMWARE_VERSION` in `src/sm3k.ino`.
+to `FIRMWARE_VERSION` in `src/sm2k.ino`.
 
 Sump Master 2000 is a fork of the vibration-monitor project, taken at
 `2026-09-22r1`. Entries below that point are the original project's history.
@@ -9,7 +9,7 @@ Sump Master 2000 is a fork of the vibration-monitor project, taken at
 ## Unreleased
 
 - Fork from vibration-monitor as a separate project. Rename the sketch
-  `src/vibration-monitor.ino` to `src/sm3k.ino`.
+  `src/vibration-monitor.ino` to `src/sm2k.ino`.
 - Planned: HC-SR04 water level and AHT20 temperature/humidity, reported every
   10 minutes to Adafruit IO and Telegraf.
 
