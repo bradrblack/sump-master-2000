@@ -13,8 +13,14 @@ Nothing below is implemented yet unless marked done. Last updated 2026-09-23.
     overflows. **Mount the transducer at least 30 cm above the highest level the
     water could physically reach** (the pit rim or floor level), using a short
     standpipe or bracket if needed.
-  - 5 V supply; the Echo line needs a voltage divider down to 3.3 V. GPIO pins
-    to be chosen (avoid 8/9).
+  - Powered from the SuperMini's 5V (USB) pin, with a shared ground.
+  - **Trig on GPIO 3**, wired directly (3.3 V is enough to trigger it).
+  - **Echo on GPIO 4** through a voltage divider, placed next to the ESP32:
+    Echo → R1 1 kΩ → GPIO 4, and GPIO 4 → R2 2 kΩ → GND (5 V × 2/3 ≈ 3.3 V;
+    2.2 kΩ / 3.3 kΩ ≈ 3.0 V also works). Some board versions output only 3.3 V on
+    Echo; measure it first, and if so wire Echo straight to GPIO 4.
+  - On v3.0 boards leave the mode resistor pad (R27) empty (Trig/Echo mode).
+  - Pins avoided: GPIO 2, 8 and 9 are boot strapping pins, and 5/6 are I2C.
 - **Temperature/humidity:** AHT20 on the existing I2C bus, 3.3 V, mounted outside
   the pit.
 - **No float switch for now.** It can be added later on a spare GPIO as an
@@ -92,8 +98,6 @@ All existing watchdogs (Wi-Fi, Adafruit IO, I2C sensor, 30 s task watchdog), the
 
 ## Housekeeping
 
-- `platformio.ini` has `default_envs = pump`, but the only environment is
-  `[env:sump]`; change it to `sump`.
 - The sketch file is `src/sm2k.ino`, but the README and CHANGELOG say
   `src/sm3k.ino`. Settle on one name.
 - The README's "Notes and gotchas" still describes the esptool upload crash and
@@ -103,4 +107,3 @@ All existing watchdogs (Wi-Fi, Adafruit IO, I2C sensor, 30 s task watchdog), the
 
 - Pit dimensions: sensor mounting height, the pump's on/off levels, and the
   high-water threshold.
-- GPIO pins for the JSN-SR04T Trig/Echo.
