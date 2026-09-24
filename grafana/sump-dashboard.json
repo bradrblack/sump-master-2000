@@ -662,7 +662,7 @@
             "lineWidth": 2,
             "fillOpacity": 10,
             "pointSize": 4,
-            "showPoints": "never",
+            "showPoints": "auto",
             "spanNulls": 1800000
           },
           "unit": "suffix: cm",
@@ -794,7 +794,7 @@
             "lineWidth": 2,
             "fillOpacity": 10,
             "pointSize": 4,
-            "showPoints": "never",
+            "showPoints": "auto",
             "spanNulls": 1800000
           },
           "unit": "s",
@@ -869,7 +869,7 @@
             "lineWidth": 2,
             "fillOpacity": 10,
             "pointSize": 4,
-            "showPoints": "never",
+            "showPoints": "auto",
             "spanNulls": 1800000
           },
           "unit": "suffix: cm",
@@ -1067,7 +1067,7 @@
             "lineWidth": 2,
             "fillOpacity": 10,
             "pointSize": 4,
-            "showPoints": "never",
+            "showPoints": "auto",
             "spanNulls": 1800000
           },
           "decimals": 1
@@ -1370,7 +1370,7 @@
             "lineWidth": 2,
             "fillOpacity": 10,
             "pointSize": 4,
-            "showPoints": "never",
+            "showPoints": "auto",
             "spanNulls": 1800000
           },
           "decimals": 0

@@ -137,7 +137,7 @@ panels.append(panel(
 
 # ---- Row 3: water level --------------------------------------------------------
 TS_DEFAULTS = {"custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10,
-                          "pointSize": 4, "showPoints": "never", "spanNulls": 1800000}}
+                          "pointSize": 4, "showPoints": "auto", "spanNulls": 1800000}}
 
 
 def points(size=7):
