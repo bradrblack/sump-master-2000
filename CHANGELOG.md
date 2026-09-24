@@ -6,6 +6,13 @@ to `FIRMWARE_VERSION` in `src/sm2k.ino`.
 Sump Master 2000 is a fork of the vibration-monitor project, taken at
 `2026-09-22r1`. Entries below that point are the original project's history.
 
+## 2026-09-24r3
+
+- Quieter logs while sensors are missing: the AHT20 is retried once a minute
+  (not every 10 s) while it isn't answering, and "no reliable echo" is logged
+  at most once a minute.
+- Telegraf send failures log the error name (e.g. "connection refused").
+
 ## 2026-09-24r2
 
 - Run without the accelerometer instead of waiting for it at boot (and

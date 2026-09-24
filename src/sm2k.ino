@@ -18,7 +18,7 @@
 #include "jsn_sr04t.h"
 
 // Bump on each flash you want to identify later -- format: YYYY-MM-DDrN.
-#define FIRMWARE_VERSION "2026-09-24r2"
+#define FIRMWARE_VERSION "2026-09-24r3"
 
 // ---- Configuration (build flags, see platformio.ini) ------------------------
 // DEVICE_NAME appears in every ntfy message and as the InfluxDB "device" tag;
@@ -126,6 +126,7 @@ const uint32_t HIGH_WATER_REPEAT_MS   = 1800000;  // repeat the alarm every 30 m
 
 // ---- Temperature / humidity (AHT20) -------------------------------------------
 const uint32_t AHT_INTERVAL_MS    = 10000;
+const uint32_t AHT_MISSING_RETRY_MS = 60000;  // retry this often while it isn't answering
 const uint32_t AHT_STALE_MS       = 60000;
 const uint32_t AHT_ALERT_MS       = 300000;  // push an alert after this long without a reading
 
@@ -524,7 +525,8 @@ bool serviceTelegraf(uint32_t now, bool force = false) {
     }
     tgDropped = 0;
   } else {
-    logf("[tg] send failed (%d), %d point(s) queued", code, tgCount);
+    logf("[tg] send failed (%d: %s), %d point(s) queued", code,
+         code < 0 ? HTTPClient::errorToString(code).c_str() : "HTTP status", tgCount);
     lastTgFailMs = now ? now : 1;
   }
   return sent;
@@ -1156,7 +1158,11 @@ void evaluateBurst(uint32_t now) {
   }
 
   if (status == LEVEL_MISSING) {
-    logf("[level] no reliable echo (%d echoes, %d too near, of %d pings)", burstEchoes, burstNear, LEVEL_PINGS);
+    static uint32_t lastLogMs = 0;
+    if (!lastLogMs || now - lastLogMs >= 60000) {
+      lastLogMs = now;
+      logf("[level] no reliable echo (%d echoes, %d too near, of %d pings)", burstEchoes, burstNear, LEVEL_PINGS);
+    }
     return;
   }
   lastEchoMs = now;
@@ -1234,7 +1240,8 @@ void checkLevelWatchdogs(uint32_t now) {
 // window (it needs 80 ms).
 void serviceAht(uint32_t now) {
   if (!ahtMeasuring) {
-    if (now - lastAhtStartMs < AHT_INTERVAL_MS) return;
+    uint32_t interval = ahtReady ? AHT_INTERVAL_MS : AHT_MISSING_RETRY_MS;
+    if (lastAhtStartMs && now - lastAhtStartMs < interval) return;
     lastAhtStartMs = now;
     if (!ahtReady) ahtReady = aht.begin();
     if (ahtReady && aht.start()) ahtMeasuring = true;
