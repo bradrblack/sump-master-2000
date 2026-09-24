@@ -1,0 +1,1422 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_INFLUX",
+      "label": "InfluxDB (Flux)",
+      "type": "datasource",
+      "pluginId": "influxdb",
+      "pluginName": "InfluxDB"
+    }
+  ],
+  "title": "Sump Master 2000",
+  "uid": "sump-master-2000",
+  "description": "Sump pump, water level and air readings from the Sump Master 2000 board.",
+  "schemaVersion": 39,
+  "version": 1,
+  "tags": [
+    "sump"
+  ],
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "timezone": "browser",
+  "graphTooltip": 1,
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      },
+      {
+        "datasource": {
+          "type": "influxdb",
+          "uid": "${DS_INFLUX}"
+        },
+        "enable": true,
+        "iconColor": "red",
+        "name": "High water",
+        "target": {
+          "refId": "Anno",
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"sump_alarm\" and r._field == \"active\" and r.device == \"${device}\")\n  |> group()\n  |> map(fn: (r) => ({_time: r._time, text: if r._value == 1 then \"High water\" else \"High water cleared\"}))"
+        }
+      },
+      {
+        "datasource": {
+          "type": "influxdb",
+          "uid": "${DS_INFLUX}"
+        },
+        "enable": true,
+        "iconColor": "blue",
+        "name": "Reboots",
+        "target": {
+          "refId": "Anno",
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"sump_boot\" and r.device == \"${device}\")\n  |> group(columns: [\"_measurement\"])\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> group()\n  |> map(fn: (r) => ({_time: r._time, text: \"Boot \" + r.version + \": \" + r.reason}))"
+        }
+      }
+    ]
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "bucket",
+        "label": "Bucket",
+        "type": "textbox",
+        "query": "CHANGE_ME",
+        "description": "InfluxDB bucket Telegraf writes to",
+        "current": {
+          "text": "CHANGE_ME",
+          "value": "CHANGE_ME"
+        },
+        "options": [
+          {
+            "selected": true,
+            "text": "CHANGE_ME",
+            "value": "CHANGE_ME"
+          }
+        ]
+      },
+      {
+        "name": "device",
+        "label": "Device",
+        "type": "textbox",
+        "query": "sump",
+        "description": "DEVICE_NAME of the board",
+        "current": {
+          "text": "sump",
+          "value": "sump"
+        },
+        "options": [
+          {
+            "selected": true,
+            "text": "sump",
+            "value": "sump"
+          }
+        ]
+      },
+      {
+        "name": "high_water_cm",
+        "label": "High water (cm)",
+        "type": "textbox",
+        "query": "45",
+        "description": "Keep equal to the firmware's HIGH_WATER_CM",
+        "current": {
+          "text": "45",
+          "value": "45"
+        },
+        "options": [
+          {
+            "selected": true,
+            "text": "45",
+            "value": "45"
+          }
+        ]
+      },
+      {
+        "name": "min_drop_cm",
+        "label": "Min drop (cm)",
+        "type": "textbox",
+        "query": "5",
+        "description": "Keep equal to the firmware's MIN_DROP_CM",
+        "current": {
+          "text": "5",
+          "value": "5"
+        },
+        "options": [
+          {
+            "selected": true,
+            "text": "5",
+            "value": "5"
+          }
+        ]
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Pump",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUX}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUX}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: -90d)\n  |> filter(fn: (r) => r._measurement == \"sump_event\" and r._field == \"running\" and r.device == \"${device}\")\n  |> last()\n  |> keep(columns: [\"_time\", \"_value\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "1": {
+                  "text": "ON",
+                  "color": "green",
+                  "index": 0
+                },
+                "0": {
+                  "text": "OFF",
+                  "color": "#6e6e6e",
+                  "index": 1
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#6e6e6e",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Water depth",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUX}"
+      },
+      "gridPos": {
+        "x": 4,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUX}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: -1h)\n  |> filter(fn: (r) => r._measurement == \"sump\" and r._field == \"level_cm\" and r.device == \"${device}\")\n  |> last()\n  |> keep(columns: [\"_time\", \"_value\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: cm",
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 35
+              },
+              {
+                "color": "red",
+                "value": 45
+              }
+            ]
+          },
+          "noValue": "no reading"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Air temperature",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUX}"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUX}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: -1h)\n  |> filter(fn: (r) => r._measurement == \"sump\" and r._field == \"temp_c\" and r.device == \"${device}\")\n  |> last()\n  |> keep(columns: [\"_time\", \"_value\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "decimals": 1,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "noValue": "no reading"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Humidity",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUX}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUX}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: -1h)\n  |> filter(fn: (r) => r._measurement == \"sump\" and r._field == \"humidity\" and r.device == \"${device}\")\n  |> last()\n  |> keep(columns: [\"_time\", \"_value\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "noValue": "no reading"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Pump cycles (range)",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUX}"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUX}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"sump_event\" and r._field == \"seconds\" and r.device == \"${device}\")\n  |> count()\n  |> keep(columns: [\"_value\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "noValue": "0"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Last data",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUX}"
+      },
+      "gridPos": {
+        "x": 20,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUX}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: -30d)\n  |> filter(fn: (r) => r._measurement =~ /^sump/ and r.device == \"${device}\")\n  |> keep(columns: [\"_time\"])\n  |> group()\n  |> sort(columns: [\"_time\"])\n  |> tail(n: 1)\n  |> map(fn: (r) => ({_time: r._time, _value: int(v: r._time) / 1000000}))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dateTimeFromNow",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "noValue": "never"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 7,
+      "type": "state-timeline",
+      "title": "Pump and alarms",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUX}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 24,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUX}"
+          },
+          "query": "prior = from(bucket: \"${bucket}\")\n  |> range(start: -90d, stop: v.timeRangeStart)\n  |> filter(fn: (r) => r._measurement == \"sump_event\" and r._field == \"running\" and r.device == \"${device}\")\n  |> last()\n  |> map(fn: (r) => ({r with _time: v.timeRangeStart}))\ndata = from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"sump_event\" and r._field == \"running\" and r.device == \"${device}\")\nunion(tables: [prior, data])\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> group()\n  |> sort(columns: [\"_time\"])\n  |> rename(columns: {_value: \"Pump\"})"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUX}"
+          },
+          "query": "prior = from(bucket: \"${bucket}\")\n  |> range(start: -90d, stop: v.timeRangeStart)\n  |> filter(fn: (r) => r._measurement == \"sump_alarm\" and r._field == \"active\" and r.device == \"${device}\")\n  |> last()\n  |> map(fn: (r) => ({r with _time: v.timeRangeStart}))\ndata = from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"sump_alarm\" and r._field == \"active\" and r.device == \"${device}\")\nunion(tables: [prior, data])\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> group()\n  |> sort(columns: [\"_time\"])\n  |> rename(columns: {_value: \"High water\"})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#6e6e6e",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "fillOpacity": 80,
+            "lineWidth": 0,
+            "spanNulls": true,
+            "insertNulls": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Pump"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "1": {
+                        "text": "ON",
+                        "color": "green",
+                        "index": 0
+                      },
+                      "0": {
+                        "text": "OFF",
+                        "color": "#6e6e6e",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "High water"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "1": {
+                        "text": "HIGH WATER",
+                        "color": "red",
+                        "index": 0
+                      },
+                      "0": {
+                        "text": "OK",
+                        "color": "transparent",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "mergeValues": true,
+        "showValue": "auto",
+        "alignValue": "center",
+        "rowHeight": 0.8,
+        "legend": {
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Water depth above the pit floor",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUX}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 9,
+        "w": 24,
+        "h": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUX}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"sump\" and r._field == \"level_cm\" and r.device == \"${device}\")\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> rename(columns: {_value: \"Water depth\"})"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUX}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"sump_cycle\" and r._field == \"level_before_cm\" and r.device == \"${device}\")\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> rename(columns: {_value: \"Pump on at\"})"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUX}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"sump_cycle\" and r._field == \"level_after_cm\" and r.device == \"${device}\")\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> rename(columns: {_value: \"Pump off at\"})"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUX}"
+          },
+          "query": "import \"array\"\narray.from(rows: [\n  {_time: v.timeRangeStart, _value: float(v: \"${high_water_cm}\")},\n  {_time: v.timeRangeStop, _value: float(v: \"${high_water_cm}\")},\n])\n  |> rename(columns: {_value: \"High-water alarm\"})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 4,
+            "showPoints": "never",
+            "spanNulls": 1800000
+          },
+          "unit": "suffix: cm",
+          "decimals": 1,
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Pump on at"
+            },
+            "properties": [
+              {
+                "id": "custom.drawStyle",
+                "value": "points"
+              },
+              {
+                "id": "custom.pointSize",
+                "value": 7
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Pump off at"
+            },
+            "properties": [
+              {
+                "id": "custom.drawStyle",
+                "value": "points"
+              },
+              {
+                "id": "custom.pointSize",
+                "value": 7
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "High-water alarm"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 1
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "description": "Water depth every 10 minutes, plus the level just before (on) and after (off) each pump run. The on/off points show the pump's real float levels, for setting HIGH_WATER_CM. The dashed line is the high_water_cm variable (keep it equal to the firmware's HIGH_WATER_CM)."
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Run time per pump cycle",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUX}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 18,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUX}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"sump_event\" and r._field == \"seconds\" and r.device == \"${device}\")\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> rename(columns: {_value: \"Run time\"})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 4,
+            "showPoints": "never",
+            "spanNulls": 1800000
+          },
+          "unit": "s",
+          "decimals": 1,
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Run time"
+            },
+            "properties": [
+              {
+                "id": "custom.drawStyle",
+                "value": "points"
+              },
+              {
+                "id": "custom.pointSize",
+                "value": 6
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "description": "Length of every run. A slow rise can mean a worn pump or a partly blocked discharge."
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Level drop per pump cycle",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUX}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 18,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUX}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"sump_cycle\" and r._field == \"drop_cm\" and r.device == \"${device}\")\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> rename(columns: {_value: \"Drop\"})"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUX}"
+          },
+          "query": "import \"array\"\narray.from(rows: [\n  {_time: v.timeRangeStart, _value: float(v: \"${min_drop_cm}\")},\n  {_time: v.timeRangeStop, _value: float(v: \"${min_drop_cm}\")},\n])\n  |> rename(columns: {_value: \"Minimum expected\"})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 4,
+            "showPoints": "never",
+            "spanNulls": 1800000
+          },
+          "unit": "suffix: cm",
+          "decimals": 1
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Drop"
+            },
+            "properties": [
+              {
+                "id": "custom.drawStyle",
+                "value": "points"
+              },
+              {
+                "id": "custom.pointSize",
+                "value": 6
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Minimum expected"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 1
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "description": "How far each run lowered the water. Below the dashed line triggers the 'pump ran but level didn't drop' push (min_drop_cm should match MIN_DROP_CM)."
+    },
+    {
+      "id": 11,
+      "type": "barchart",
+      "title": "Pump cycles per day",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUX}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 26,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUX}"
+          },
+          "query": "import \"timezone\"\noption location = timezone.location(name: \"America/New_York\")\nfrom(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"sump_event\" and r._field == \"seconds\" and r.device == \"${device}\")\n  |> aggregateWindow(every: 1d, fn: count, createEmpty: true, timeSrc: \"_start\")\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> rename(columns: {_value: \"Cycles\"})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "xTickLabelRotation": 0,
+        "legend": {
+          "showLegend": false
+        },
+        "stacking": "none",
+        "xField": "_time",
+        "barWidth": 0.8
+      }
+    },
+    {
+      "id": 12,
+      "type": "barchart",
+      "title": "Pump run time per day",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUX}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 26,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUX}"
+          },
+          "query": "import \"timezone\"\noption location = timezone.location(name: \"America/New_York\")\nfrom(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"sump_event\" and r._field == \"seconds\" and r.device == \"${device}\")\n  |> map(fn: (r) => ({r with _value: r._value / 60.0}))\n  |> aggregateWindow(every: 1d, fn: sum, createEmpty: true, timeSrc: \"_start\")\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> rename(columns: {_value: \"Run time\"})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "m",
+          "decimals": 1,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "xTickLabelRotation": 0,
+        "legend": {
+          "showLegend": false
+        },
+        "stacking": "none",
+        "xField": "_time",
+        "barWidth": 0.8
+      }
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Temperature and humidity",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUX}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 34,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUX}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"sump\" and r._field == \"temp_c\" and r.device == \"${device}\")\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> rename(columns: {_value: \"Temperature\"})"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUX}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"sump\" and r._field == \"humidity\" and r.device == \"${device}\")\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> rename(columns: {_value: \"Humidity\"})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 4,
+            "showPoints": "never",
+            "spanNulls": 1800000
+          },
+          "decimals": 1
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Temperature"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "celsius"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Humidity"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 14,
+      "type": "table",
+      "title": "Recent pump cycles",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUX}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 42,
+        "w": 14,
+        "h": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUX}"
+          },
+          "query": "nums = from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"sump_cycle\" and r._field != \"result\" and r.device == \"${device}\")\n  |> group(columns: [\"_measurement\"])\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> group()\nres = from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"sump_cycle\" and r._field == \"result\" and r.device == \"${device}\")\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> rename(columns: {_value: \"result\"})\n  |> group()\njoin(tables: {n: nums, r: res}, on: [\"_time\"])\n  |> keep(columns: [\"_time\", \"seconds\", \"level_before_cm\", \"level_after_cm\", \"drop_cm\", \"result\"])\n  |> sort(columns: [\"_time\"], desc: true)\n  |> limit(n: 100)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 1
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "_time"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Stopped at"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "seconds"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Ran"
+              },
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "level_before_cm"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "On at (cm)"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "level_after_cm"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Off at (cm)"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "drop_cm"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Drop (cm)"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "result"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Check"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "ok": {
+                        "text": "ok",
+                        "color": "green",
+                        "index": 0
+                      },
+                      "no_drop": {
+                        "text": "DIDN'T DROP",
+                        "color": "red",
+                        "index": 1
+                      },
+                      "unverified": {
+                        "text": "no reading",
+                        "color": "#6e6e6e",
+                        "index": 2
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 15,
+      "type": "table",
+      "title": "Alarms and reboots",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUX}"
+      },
+      "gridPos": {
+        "x": 14,
+        "y": 42,
+        "w": 10,
+        "h": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUX}"
+          },
+          "query": "alarms = from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"sump_alarm\" and r._field == \"active\" and r.device == \"${device}\")\n  |> group()\n  |> map(fn: (r) => ({_time: r._time, event: if r._value == 1 then \"High water\" else \"High water cleared\"}))\nboots = from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"sump_boot\" and r.device == \"${device}\")\n  |> group(columns: [\"_measurement\"])\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> group()\n  |> map(fn: (r) => ({_time: r._time, event: \"Boot \" + r.version + \": \" + r.reason}))\nunion(tables: [alarms, boots])\n  |> group()\n  |> sort(columns: [\"_time\"], desc: true)\n  |> limit(n: 100)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "_time"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Time"
+              },
+              {
+                "id": "custom.width",
+                "value": 170
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "event"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Event"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Board: Wi-Fi signal and free memory",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUX}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 51,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUX}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"sump\" and r._field == \"rssi\" and r.device == \"${device}\")\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> rename(columns: {_value: \"Wi-Fi RSSI\"})"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUX}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"sump\" and r._field == \"heap\" and r.device == \"${device}\")\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> rename(columns: {_value: \"Free heap\"})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 4,
+            "showPoints": "never",
+            "spanNulls": 1800000
+          },
+          "decimals": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Wi-Fi RSSI"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dBm"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Free heap"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "description": "A steady fall in free heap between nightly reboots would point to a leak."
+    }
+  ]
+}

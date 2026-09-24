@@ -1,0 +1,82 @@
+# Grafana alerting provisioning: "Sump monitor silent" -> ntfy.
+#
+# Fires when no sump data at all (readings, events, boots) has reached InfluxDB
+# for 30 minutes -- a dead board, power loss, Wi-Fi gone, Telegraf down, or a
+# firmware hang the watchdogs missed. The board can't report any of those
+# itself. The 10-minute readings are the heartbeat, so two can be missed.
+#
+# Install: fill in the three CHANGE_ME values, copy to Grafana's
+# provisioning/alerting/ directory (e.g. /etc/grafana/provisioning/alerting/)
+# and restart Grafana. The rule routes straight to its own contact point
+# (notification_settings), so your notification policies are left alone.
+# Provisioned items are read-only in the UI; edit this file instead.
+#
+# The contact point is a plain webhook: ntfy's template mode (tpl=yes) turns
+# Grafana's webhook JSON into a normal push, using its "title" and "message".
+# A "resolved" push follows when data arrives again.
+
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: ntfy-sump
+    receivers:
+      - uid: ntfy-sump
+        type: webhook
+        settings:
+          # Your NTFY_TOPIC from secrets.h.
+          url: "https://ntfy.sh/CHANGE_ME_TOPIC?tpl=yes&t={{.title}}&m={{.message}}&p=4&ta=warning"
+          httpMethod: POST
+        disableResolveMessage: false
+
+groups:
+  - orgId: 1
+    name: sump
+    folder: Sump
+    interval: 5m
+    rules:
+      - uid: sump-no-data
+        title: Sump monitor silent
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 1800
+              to: 0
+            # UID of your InfluxDB (Flux) data source: Connections > Data sources,
+            # it's the last part of the data source's URL.
+            datasourceUid: CHANGE_ME_DATASOURCE_UID
+            model:
+              refId: A
+              # Number of sump points in the last 30 minutes. No rows at all
+              # comes back as "no data", which noDataState turns into firing.
+              query: |
+                from(bucket: "CHANGE_ME_BUCKET")
+                  |> range(start: -30m)
+                  |> filter(fn: (r) => r._measurement =~ /^sump/ and r.device == "sump")
+                  |> keep(columns: ["_time"])
+                  |> map(fn: (r) => ({r with _value: 1}))
+                  |> group()
+                  |> count()
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]
+        noDataState: Alerting
+        execErrState: Error
+        for: 0s
+        annotations:
+          summary: No data from the sump monitor for 30 minutes.
+          description: >-
+            Check that the board has power and Wi-Fi (serial log, or ping sm2k.local)
+            and that Telegraf is running on the InfluxDB host.
+        labels:
+          device: sump
+        notification_settings:
+          receiver: ntfy-sump
