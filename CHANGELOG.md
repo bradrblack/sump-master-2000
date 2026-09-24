@@ -6,12 +6,29 @@ to `FIRMWARE_VERSION` in `src/sm2k.ino`.
 Sump Master 2000 is a fork of the vibration-monitor project, taken at
 `2026-09-22r1`. Entries below that point are the original project's history.
 
-## Unreleased
+## 2026-09-24r1
+
+First Sump Master 2000 firmware (not yet tested on hardware).
 
 - Fork from vibration-monitor as a separate project. Rename the sketch
   `src/vibration-monitor.ino` to `src/sm2k.ino`.
-- Planned: HC-SR04 water level and AHT20 temperature/humidity, reported every
-  10 minutes to Adafruit IO and Telegraf.
+- Remove Adafruit IO. Pump events and 10-minute readings go to Telegraf on the
+  LAN as InfluxDB line protocol over HTTP, queued on the board if Telegraf is
+  down (`telegraf/sump.conf` replaces the Adafruit IO config).
+- Add JSN-SR04T water level (median of 5-ping bursts, speed of sound corrected
+  for temperature, blind-zone handling, suspect-jump filter) and AHT20
+  temperature/humidity (CRC-checked).
+- Support the GY-346 (ADXL346) accelerometer (device ID 0xE6) as well as the
+  ADXL345.
+- ntfy: real-time pump on/off (no one-minute window; the stop includes the
+  run time), high-water alarm repeated every 30 minutes with an all clear,
+  "pump ran but the level didn't drop" alarm, daily report before the 3 AM
+  reboot (replaces the nightly reboot push), sensor and Telegraf outage alerts.
+  Pushes are queued and retried.
+- OTA updates pushed from the Mac (`pio run -e sump-ota -t upload`), accepted
+  only while the pump is idle, with automatic rollback if the new firmware isn't
+  healthy. Partition table changed to `min_spiffs.csv`: the first flash must be
+  over USB.
 
 ## Inherited from vibration-monitor
 

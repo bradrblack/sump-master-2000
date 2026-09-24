@@ -1,150 +1,165 @@
 # Sump Master 2000
 
-> **This is a fork of the vibration-monitor project** (the ESP32-C3 + ADXL345
-> appliance monitor), kept as a separate project. The original stays a general
-> multi-device vibration monitor; Sump Master 2000 is sump-pump specific and
-> adds:
->
-> - **Water level** from a JSN-SR04T waterproof ultrasonic sensor over the pit.
-> - **Temperature / humidity** (AHT20 on the I2C bus).
-> - **No Adafruit IO.** Data goes to Telegraf/InfluxDB on the LAN and
->   notifications go to ntfy.sh:
->   - Pump ON/OFF events as they happen, plus water level, temperature, humidity
->     and pump activity every 10 minutes, sent to Telegraf over HTTP and shown
->     on a sump-specific Grafana dashboard. Grafana alerts via ntfy if the
->     device goes silent.
->   - Real-time pump ON/OFF pushes to ntfy.
->   - A daily ntfy report just before the 3 AM reboot: pump state, water level,
->     temperature and humidity.
->   - High-water alerts via ntfy, repeated every 30 minutes until the level
->     drops, and an alert when the pump runs but the level doesn't drop.
-> - **OTA updates** pushed from the Mac over the home network, with automatic
->   rollback if new firmware isn't healthy.
->
-> The sketch is `src/sm2k.ino`. These additions are in the design stage; see
-> [PLAN.md](PLAN.md) for the full design and open questions. The rest of this
-> README describes the behavior inherited from vibration-monitor, which is
-> unchanged so far. Its Adafruit IO sections will be replaced as the new
-> design is implemented.
+An ESP32-C3 sump pump monitor. It detects the pump running from its vibration,
+measures the water level and the air temperature/humidity, sends everything to
+InfluxDB (via Telegraf on the LAN) for a Grafana timeline, and pushes pump
+events, alarms and a daily report to your phone with [ntfy.sh](https://ntfy.sh).
 
-# Device Monitor via Vibration (inherited)
+It's a fork of the vibration-monitor project (the ESP32-C3 + ADXL345 appliance
+monitor), made sump specific. There's no cloud service in the data path: Adafruit
+IO is gone. [PLAN.md](PLAN.md) has the design and the remaining open questions.
 
-Monitors a device that vibrates when it operates, such as a sump pump, washing
-machine or AC unit, by clamping an ADXL345 accelerometer to the device (or, for
-a sump pump, to the discharge pipe) and detecting the motor's vibration.
+The sketch is `src/sm2k.ino`, with small drivers for the level sensor
+(`src/jsn_sr04t.*`) and the AHT20 (`src/aht20.*`).
 
-Runs on an ESP32-C3 and reports named started/stopped events, with the exact
-run length, as JSON to a single Adafruit IO feed, `appliance-events`, shared by
-every monitored device. One firmware serves the whole fleet: each device is a
-PlatformIO environment that sets its name and tuning (see
-[Adding another device](#adding-another-device)). The first device is a sump
-pump.
+## What it does
 
-## How it works
+- **Pump on/off:** a GY-346 (ADXL346) accelerometer clamped to the pump or the
+  discharge pipe. Samples at 400 Hz, high-passes each axis (~13 Hz cutoff) to
+  reject gravity, footsteps and house rumble, and computes RMS over 250 ms
+  windows. `RUN_CONFIRM_MS` of continuous vibration above `ON_RMS_THRESHOLD`
+  starts a run; `STOP_CONFIRM_MS` of quiet below `OFF_RMS_THRESHOLD` ends it
+  (3 s each).
+- **Water level:** a JSN-SR04T waterproof ultrasonic sensor under the pit lid.
+  Every 5 s it takes the median of a burst of 5 pings (one per 250 ms window, so
+  vibration sampling never waits), corrected for the speed of sound at the
+  measured air temperature. Level is reported as water depth above the pit
+  floor.
+- **Temperature/humidity:** an AHT20 on the same I2C bus, read every 10 s and
+  CRC-checked.
+- **Data to InfluxDB:** pump start/stop as it happens, and every 10 minutes the
+  level, temperature, humidity and pump activity. See [Data](#data).
+- **ntfy pushes:** see [Notifications](#notifications).
+- **OTA updates** pushed from the Mac over Wi-Fi, with automatic rollback if the
+  new firmware isn't healthy. See [Updating](#updating-firmware).
 
-- Samples the ADXL345 at 400 Hz and high-passes each axis (~13 Hz cutoff) to
-  reject gravity, footsteps and house rumble while passing motor vibration
-  (~29-58 Hz).
-- Computes RMS over 250 ms windows.
-- The onboard LED is off when quiet, solid while any vibration is detected
-  (e.g. picking the board up), and blinks while the device is considered running.
-- Run state is debounced: `RUN_CONFIRM_MS` of continuous vibration above
-  `ON_RMS_THRESHOLD` starts a run, `STOP_CONFIRM_MS` of continuous quiet below
-  `OFF_RMS_THRESHOLD` ends it (3 s each for the pump).
-- Each start/stop becomes an event that is queued and published to the
-  `appliance-events` feed, at most one event per minute per device (a burst of
-  events queues up and drains one per minute). Every event carries the time it
-  really happened, so publishing delays don't distort the record. See
-  [Event format](#event-format).
-- Serial output (115200) prints `rms=... state=... wifi=... aio=...` once a
-  second. `aio=up` means an active MQTT session with Adafruit IO.
+The onboard LED is off when quiet, solid while any vibration is detected (e.g.
+picking the board up), and blinks while the pump is considered running.
 
-## Wiring
+Serial output (115200) prints a status line once a second:
+`rms=0.012 state=idle level=12.3cm air=17.9C/71% wifi=up tgq=0` (`tgq` is the
+number of points waiting to be sent to Telegraf).
 
-| ADXL345 | ESP32-C3 |
-|---------|----------|
-| SDA     | GPIO 5   |
-| SCL     | GPIO 6   |
+## Hardware and wiring
 
-GPIO 8/9 are the LED and boot strapping pins on this board, so I2C is moved
-off them. The LED is on GPIO 8 (set `LED_ACTIVE_LOW` in the sketch if yours
-lights on HIGH).
+| Part | Connection |
+|------|------------|
+| GY-346 (ADXL346) SDA / SCL | GPIO 5 / GPIO 6 |
+| AHT20 SDA / SCL | GPIO 5 / GPIO 6 (same bus) |
+| JSN-SR04T Trig | GPIO 3 (direct) |
+| JSN-SR04T Echo | GPIO 4 **through a voltage divider** (Echo is 5 V) |
+| JSN-SR04T 5V / GND | SuperMini 5V (USB) / GND |
+| LED | GPIO 8 (onboard, active low) |
+
+GPIO 2, 8 and 9 are boot strapping pins on the C3, so nothing else uses them.
+
+**GY-346 note:** the ADXL346 is register-compatible with the ADXL345 and uses
+the same Adafruit library, but reports device ID `0xE6` rather than `0xE5`, which
+the library's `begin()` rejects. The firmware accepts either chip and enables
+measurement itself.
+
+**Echo divider:** Echo → 1 kΩ → GPIO 4, and GPIO 4 → 2 kΩ → GND (≈3.3 V; 2.2 kΩ /
+3.3 kΩ also works). Some board versions output only 3.3 V on Echo: measure it
+first, and if so wire it straight to GPIO 4. [PLAN.md](PLAN.md#jsn-sr04t-wiring)
+has the diagram and details.
+
+**Mounting the level sensor:** the JSN-SR04T is blind closer than about 20-25 cm
+and can then report a double echo (about twice the real distance), which would
+read as "low" just as the pit overflows. Mount the transducer **at least 30 cm
+above the highest level the water can reach** (the pit rim), on a bracket or
+riser. Readings closer than 25 cm are treated as "at or above the limit", never
+as a real distance.
 
 ## Setup
 
-Copy `src/secrets.h.example` to `src/secrets.h` (git-ignored) and fill in your
-Wi-Fi and Adafruit IO credentials (shared by every device):
+1. **Secrets:**
+   ```
+   cp src/secrets.h.example src/secrets.h
+   cp secrets.ini.example secrets.ini
+   ```
+   `src/secrets.h` holds Wi-Fi, the Telegraf URL and the ntfy topic;
+   `secrets.ini` holds the OTA password (letters and digits), used both to build
+   the firmware and to authenticate uploads. Both are git-ignored.
+2. **Pit settings** in `platformio.ini` (`[env:sump]`): `SENSOR_TO_FLOOR_CM`,
+   `HIGH_WATER_CM`, `HIGH_WATER_HYST_CM`, `MIN_DROP_CM`. The values there are
+   placeholders until the sensor is mounted; see [Calibration](#calibration).
+3. **Telegraf:** copy `telegraf/sump.conf` to `/etc/telegraf/telegraf.d/` on the
+   InfluxDB host, add the variables from `telegraf/sump.env.example` to
+   Telegraf's environment file (use a write-only token) and restart Telegraf.
+   It listens on port 8186 for the board's POSTs.
+4. **ntfy:** subscribe to your `NTFY_TOPIC` in the ntfy app.
+5. **First flash over USB** (it installs the OTA partition table):
+   `pio run -t upload`.
+
+## Updating firmware
+
+After the first USB flash, update over Wi-Fi from the Mac:
 
 ```
-cp src/secrets.h.example src/secrets.h
+pio run -e sump-ota -t upload
 ```
 
-Create the shared `appliance-events` feed in Adafruit IO. Optionally set
-`NTFY_TOPIC` in `secrets.h` to enable push notifications (see
-[Reliability and notifications](#reliability-and-notifications)).
+- The board is found as `sm2k.local` (change `upload_port` in `platformio.ini` to
+  an IP address if mDNS doesn't resolve).
+- Updates are only accepted while the pump is idle (an upload pauses sampling
+  for ~15 s). If the pump is running the upload fails with no response; run it
+  again once the pump stops.
+- **Rollback:** a new image runs as a trial. After 3 minutes with Wi-Fi up and
+  every sensor that was working before the update working again, it's marked
+  good and ntfy says `sump updated A -> B`. If it isn't healthy within 10
+  minutes, crashes, or reboots during the trial (including failing to join
+  Wi-Fi), the bootloader switches back to the previous firmware and ntfy says
+  `update rolled back` with the reason.
+- Bump `FIRMWARE_VERSION` in `src/sm2k.ino` for each release.
+- Recovery if all else fails: USB flash (`pio run -t upload`).
 
-Each device's name and tuning are **not** in `secrets.h`: they are build flags in
-its `[env:<device>]` section of `platformio.ini` (`DEVICE_NAME`,
-`ON_RMS_THRESHOLD`, `OFF_RMS_THRESHOLD`, `RUN_CONFIRM_MS`, `STOP_CONFIRM_MS`).
-Build and flash a device by environment name, e.g. `pio run -e pump` (see
-[Notes and gotchas](#notes-and-gotchas) for flashing). Tune its thresholds from
-the `rms=` values printed with the machine idle and running.
+## Data
 
-## Event format
+The board POSTs InfluxDB line protocol to Telegraf's `http_listener_v2`
+(`TELEGRAF_URL`), timestamped with its own NTP-synced clock, so late or buffered
+points land at the right time. All points are tagged `device=sump`.
 
-Every event is one JSON string, so one feed can carry any number of devices:
+| Measurement | When | Fields |
+|---|---|---|
+| `sump` | every 10 min, on the clock | `level_cm`, `distance_cm`, `level_status` (`ok`/`near_limit`/`missing`), `temp_c`, `humidity`, `running`, `cycles` and `run_s` (for the 10 minutes), `rssi`, `heap` |
+| `sump_event` | pump start/stop | `event`, `running`, `seconds` (stop), `level_cm` (start); `note="restart"` on a post-reboot correction |
+| `sump_cycle` | after each run | `seconds`, `level_before_cm`, `level_after_cm`, `drop_cm`, `result` (`ok`/`no_drop`/`unverified`) |
+| `sump_alarm` | high water on/off | `type`, `active`, `level_cm` |
+| `sump_boot` | each boot | `version`, `reason` |
 
-```json
-{"device":"pump","event":"start","at":"2026-09-20T09:12:01-0400"}
-{"device":"pump","event":"stop","seconds":28.8,"at":"2026-09-20T09:12:30-0400"}
-```
+If Telegraf can't be reached, points queue on the board (150 lines, about a day
+of readings plus events) and are sent in order when it's back; if the queue
+fills, the oldest are dropped. The queue is in RAM, so a reboot loses it.
 
-- `device` is the environment's `DEVICE_NAME`; `event` is `start` or `stop`.
-- `seconds` (stop events only) is the measured run length.
-- `at` is when it really happened per the device's NTP-synced clock; omitted if
-  the clock hadn't synced. Adafruit IO's own timestamp is when it arrived, which
-  can lag by a minute or more because of the rate limit.
-- `note` appears on corrections, e.g. `"note":"restart"` (see
-  [Stuck "running" correction](#reliability-and-notifications)).
+**Grafana:** a sump-specific dashboard (pump state timeline, water level with
+the high-water line, temperature and humidity, alarm and reboot annotations)
+and a "no sump data for 30 minutes" alert to ntfy are planned; see
+[PLAN.md](PLAN.md). `grafana/appliance-monitor.json` is the old
+vibration-monitor dashboard and will be replaced.
 
-A single shared feed gives you an event timeline, not per-device charts or
-gauges (Adafruit IO charts need numeric values). Per-device state tiles would
-need separate feeds.
+## Notifications
 
-## Adding another device
+All pushes go to `NTFY_TOPIC` (leave it out of `secrets.h` to disable them; they
+are then only logged). They're queued and retried if the internet is down.
 
-1. Copy the commented `[env:washer]` template in `platformio.ini`, rename it, and
-   set `DEVICE_NAME` (plain characters, it goes into JSON as-is).
-2. Build that environment (`pio run -e washer`) and read the `rms=` values over
-   serial with the machine idle and running, then set the thresholds.
-3. Set `STOP_CONFIRM_MS` for how the machine behaves. A pump is on/off, but a
-   washer pauses inside a cycle (fill, soak, drain), so it needs a long stop
-   delay (minutes) or one cycle would be reported as several. The template's
-   numbers are placeholders, not calibrated values.
-4. The same `secrets.h` (Wi-Fi, Adafruit IO, ntfy topic) works for every device;
-   ntfy messages and reboot notices are titled with the device name.
+| Push | Priority |
+|---|---|
+| `sump started` / `sump stopped` in real time; the stop includes the run time, e.g. `Stopped at 2026-09-24 09:12:30 EDT (ran 28.8 s)` | default |
+| **High water**: as soon as the level passes `HIGH_WATER_CM` (or reaches the sensor's limit), then every 30 minutes until it falls `HIGH_WATER_HYST_CM` below, then one "all clear" | urgent |
+| **Pump ran but the level didn't drop** by `MIN_DROP_CM`: before/after levels and run time (clogged discharge, stuck check valve, pump running dry). If there was no level reading around the run: "can't verify" | high |
+| **Daily report** just before the 3 AM reboot: pump state, water level, temperature and humidity, cycles/run time/longest run/highest water since the last report, firmware version | low (silent) |
+| Sensor not responding (accelerometer, level sensor, AHT20), and recovered | high |
+| Telegraf unreachable for 30 minutes, and reachable again | default |
+| Exception reboots with the reason, e.g. `sump rebooted: WiFi down watchdog (reboot #2)` | default |
+| OTA updated / rolled back | default / high |
 
-## InfluxDB / Grafana timeline
+ntfy.sh has per-IP rate and daily message limits for anonymous use, shared with
+anything else on your public IP. Every pump cycle is two pushes, so check the
+limits against a heavy wet-season day.
 
-Telegraf on the InfluxDB host subscribes to the Adafruit IO feed over MQTT and
-writes each event to InfluxDB 2.x as `appliance_state,device=<name>` with fields
-`event`, `running` (1/0) and `seconds` (run length, stop events only), timestamped
-with the event's own `at` time. A new device appears automatically, with no
-Telegraf or dashboard change.
+## Reliability
 
-1. Copy `telegraf/appliance-events.conf` to `/etc/telegraf/telegraf.d/` on the host.
-2. Add the variables from `telegraf/appliance-events.env.example` to Telegraf's
-   environment file (use a write-only Influx token) and restart Telegraf.
-3. In Grafana, import `grafana/appliance-monitor.json`, pick the InfluxDB (Flux)
-   data source, and set the `bucket` variable to your bucket name.
-
-Telegraf only sees events while it is running, so events published during an
-outage are not backfilled.
-
-## Reliability and notifications
-
-This is meant to run unattended, so it borrows the
-self-healing approach from the
+Borrows the self-healing approach from the
 [RF ceiling fan remote](https://github.com/bradrblack/rf-ceiling-fan-remote)
 firmware: recover on its own where possible, and never fail silently.
 
@@ -152,94 +167,35 @@ firmware: recover on its own where possible, and never fail silently.
 |-----------|----------|
 | **Bounded Wi-Fi connect at boot** | If Wi-Fi isn't up within 30 s, reboot and retry instead of hanging. |
 | **Wi-Fi watchdog** | If Wi-Fi drops it resets the radio and retries every 30 s; if it stays down for 2 minutes, reboot. |
-| **Adafruit IO watchdog** | Wi-Fi can stay associated while Adafruit IO is unreachable (DNS/TLS/auth), which the Wi-Fi watchdog can't see. Reboot if Wi-Fi is up but Adafruit IO has been unreachable for 10 minutes. |
-| **I2C sensor watchdog** | Every 30 s the ADXL345's fixed device ID (`0xE5`) is read. Three failed checks in a row (unplugged, loose wire, wedged bus) reboot the board. Without this a dead sensor reads as zeros and looks like a permanently quiet pump. |
-| **Sensor check at boot** | I2C bus recovery first (clocks SCL to release a bus the sensor is holding low, which a reboot alone doesn't clear), then waits for the ADXL345. If it never appears it pushes a notification after 1 minute and reboots after 30 minutes. |
-| **Nightly reboot** | Once a day at 3 AM local time (`REBOOT_HOUR`, US Eastern via `TZ_STRING`, DST-aware, time from NTP) to guard against slow heap fragmentation. It is held off while the device is running or an event is still unsent, so it never drops a run in progress. The "already rebooted today" flag is stored in flash so it can't reboot-loop within the 3 AM hour. |
-| **Unexpected reset detection** | A crash, hardware/task watchdog or brownout resets the chip before any of the above can run. On the next boot the reset reason is checked, and anything other than a power cycle, reset button, flashing, or our own deliberate restart is reported. |
-| **Stuck "running" correction** | The last event published for this device is stored in flash. If the board reboots after a `start` and the device is really idle 15 s after boot, it publishes a `stop` with `"note":"restart"` (and no run length) so the feed doesn't imply it's still running. |
+| **Telegraf outage** | Doesn't reboot (that can't fix the server): data queues and one push says so. |
+| **Accelerometer watchdog** | Every 30 s the accelerometer's device ID is read. Three failed checks in a row (unplugged, loose wire, wedged bus) reboot the board. Without this a dead sensor reads as zeros and looks like an idle pump. |
+| **Sensor check at boot** | I2C bus recovery first (clocks SCL to release a bus a sensor is holding low, which a reboot alone doesn't clear), then waits for the accelerometer. If it never appears it pushes a notification after 1 minute and reboots after 30 minutes. OTA stays available meanwhile. |
+| **Level and AHT20 watchdogs** | Push an alert when there's been no reliable echo for 2 minutes, or no AHT20 reading for 5 minutes, and again when they recover. |
+| **Suspect level readings** | A jump of more than 15 cm between readings is held until the next reading confirms it. |
+| **Task watchdog** | A 30 s hardware watchdog resets a hung main loop; the reset is reported on the next boot. |
+| **Nightly reboot** | 3 AM local time (`REBOOT_HOUR`, US Eastern via `TZ_STRING`, DST-aware) to guard against slow heap fragmentation, after sending the daily report. Held off while the pump runs, high water is active, a push is waiting or an OTA trial is running. The "already rebooted today" day is stored in flash so it can't reboot-loop within the hour. |
+| **Unexpected reset detection** | A crash, watchdog or brownout reset is detected on the next boot and pushed. Power cycles, the reset button, flashing and deliberate restarts are not. |
+| **Stuck "running" correction** | If the board reboots mid-run and the pump is idle 15 s after boot, a `stop` (with `note="restart"`, no run length) is recorded and pushed so nothing implies it's still running. |
 
-### Reboot notifications (ntfy.sh)
+## Calibration
 
-The reason for every self-triggered reboot is written to flash right before
-restarting, then pushed to [ntfy.sh](https://ntfy.sh) once Wi-Fi is up on the
-next boot, e.g. `pump rebooted: ADXL345 not responding (I2C) (reboot #2) at
-2026-09-19 14:03:11 EDT` (titled with the device name). A manual power cycle leaves no reason behind, so
-it stays quiet. `reboot #N` counts only exception reboots, not the nightly one.
-
-- Set `NTFY_TOPIC` in `secrets.h` to a random, unguessable topic (topics are
-  unauthenticated) and subscribe to it in the ntfy app. Without it, pushes are
-  disabled and the would-be message is only logged to serial.
-- The nightly reboot also pushes by default, doubling as a "still alive"
-  heartbeat for an unattended device. Set `NOTIFY_DAILY_REBOOT` to
-  `false` to only be told about exception reboots.
-
-### Started/stopped notifications
-
-For initial testing (and as a second channel next to Adafruit IO), start/stop
-events are also pushed to ntfy, titled `<device> started` / `<device> stopped`
-(with the run length). At most one push per minute, and only if the state
-differs from the last one pushed, so a run that starts and ends inside a minute
-sends nothing (unlike the feed, which records every event). Set
-`NOTIFY_RUN_STATE` to `false` in the sketch to turn these off once you trust the
-detection. Requires `NTFY_TOPIC`.
-
-### Not ported from the fan project
-
-The SinricPro watchdog is replaced by the Adafruit IO watchdog above, and the
-CC1101 radio watchdog is replaced by the I2C sensor watchdog. The clock-jump
-detection and OTA/WiFiManager pieces weren't carried over.
+- **Vibration thresholds:** watch the `rms=` values over serial with the pump
+  idle and running, and set `ON_RMS_THRESHOLD` / `OFF_RMS_THRESHOLD`.
+- **Pit:** set `SENSOR_TO_FLOOR_CM` to the measured distance from the sensor to
+  the empty pit floor. Every pump run is logged over serial (and in
+  `sump_cycle`) as `Pump cycle: on at X cm, off at Y cm, dropped Z cm`, so after
+  a few real cycles set `HIGH_WATER_CM` a few cm above the normal "on" level and
+  `MIN_DROP_CM` well below the normal drop.
 
 ## Notes and gotchas
 
-- `platformio.ini` uses `lib_ignore` for WiFi101 and WiFiNINA. Adafruit IO's
-  dependency list pulls them in and their `WiFi.h` shadows the ESP32 one,
-  which makes `WiFi.status()` hang.
 - Wi-Fi TX power is capped (`WIFI_TX_POWER`, 15 dBm). At full power this
-  ESP32-C3 mini board joined Wi-Fi on only ~1 in 3 boots. 8.5 dBm gave 4 of 4
-  boots (about 7.5 s to connect) and 15 dBm gave 5 of 5 (4.6-5.8 s). If a board
-  is flaky at 15 dBm, drop to `WIFI_POWER_8_5dBm`.
+  ESP32-C3 mini board joined Wi-Fi on only ~1 in 3 boots. If a board is flaky
+  at 15 dBm, drop to `WIFI_POWER_8_5dBm`.
 - Log lines are timestamped (wall-clock time once NTP syncs, uptime before
-  that) and the boot banner prints `FIRMWARE_VERSION`; bump it on each flash
-  you want to identify later.
-- `pio run -t upload` currently crashes with the default esptool 5.4.0 (progress
-  bar bug with esp-pylib 1.1.5) and can leave the board unbootable
-  (`No bootable app partitions`); reflashing as below recovers it. Build with
-  `pio run -e <device>`, then flash the combined image with an esptool 4.x
-  install (`pip install esptool==4.11.0` in a venv):
-
-  ```
-  esptool.py --chip esp32c3 -p <port> -b 115200 write_flash 0x0 .pio/build/<device>/firmware.factory.bin
-  ```
-
+  that) and the boot banner prints `FIRMWARE_VERSION`.
+- The platform is pinned (`55.03.37`) because the unpinned "stable" release's
+  esptool crashed mid-upload; don't unpin it.
 - The USB port name changes each time the board re-enumerates; close any
-  serial monitor before flashing.
-
-## Future ideas
-
-### Battery-powered version (deep sleep + accelerometer wake)
-
-Not planned yet; parked for later. The idea is to sleep the ESP32 and let the
-ADXL345 wake it:
-
-1. ESP32 deep sleeps. The ADXL345 watches for motion (~25 uA) using its
-   activity interrupt and drives INT1.
-2. On wake, sample ~3 s with the existing RMS/continuity logic. Footsteps and
-   bumps fail the check and it goes back to sleep.
-3. On a confirmed run: join Wi-Fi, publish a `start` event, then re-arm the ADXL to
-   interrupt on *inactivity* (up to 255 s of no motion) and sleep.
-4. On inactivity wake: publish a `stop` event, re-arm for activity, sleep.
-5. Keep cycle count and last published state in RTC memory
-   (`RTC_DATA_ATTR`) so the one-per-minute publish limit survives sleep.
-
-Things to sort out first:
-
-- Wire ADXL345 INT1 to a deep-sleep-capable GPIO (0-5 on the C3), e.g. GPIO 4.
-  Reading `INT_SOURCE` clears the interrupt; wake is level-triggered.
-- Board sleep current matters most: the bare chip sleeps at ~5 uA, but many dev
-  boards (USB chip, power LED, regulator) draw 100 uA to 1 mA+.
-- False wakes from footsteps cost ~4 s at 30-40 mA each; raise the activity
-  threshold if the house is busy.
-- Wi-Fi join is the expensive step (~3-5 s at 100 mA+), fine at a few runs
-  per day.
-- Keep the current always-on sketch as a USB "debug mode" for threshold tuning.
+  serial monitor before flashing, and restart the monitor after the board
+  reboots.

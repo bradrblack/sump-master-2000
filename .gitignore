@@ -1,3 +1,4 @@
 .pio
 .h
 src/secrets.h
+secrets.ini

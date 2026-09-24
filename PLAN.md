@@ -1,12 +1,23 @@
 # Sump Master 2000 — plan
 
 Design plan for the sump-specific additions to the fork of vibration-monitor.
-Nothing below is implemented yet unless marked done. Last updated 2026-09-24.
+Last updated 2026-09-24.
+
+## Status
+
+- **Firmware: written** (`2026-09-24r1`), builds cleanly, **not yet tested on
+  hardware**.
+- **Telegraf config: written** (`telegraf/sump.conf`).
+- **To do:** Grafana sump dashboard and the "no sump data" alert; hardware
+  bring-up and calibration (pit dimensions, pump on/off levels).
 
 ## Hardware
 
 - **Board:** ESP32-C3 SuperMini (4 MB flash), as in vibration-monitor.
-- **Pump running:** ADXL345 accelerometer on I2C (GPIO 5 SDA, 6 SCL), unchanged.
+- **Pump running:** GY-346 module (ADXL346 accelerometer) on I2C (GPIO 5 SDA,
+  6 SCL). Register-compatible with the ADXL345 and driven by the same Adafruit
+  library, but its device ID is 0xE6 (not 0xE5), which the library's `begin()`
+  rejects; the firmware accepts either.
 - **Water level:** JSN-SR04T waterproof ultrasonic sensor, mounted under the pit lid.
   - It is blind closer than about 20-25 cm and can then report a double echo
     (about twice the real distance), which would read as "low" just as the pit
@@ -217,11 +228,6 @@ name while its reliability testing continues, and will be renamed later.
 The Wi-Fi, I2C sensor and 30 s task watchdogs, the 3 AM nightly reboot, and
 reboot-reason notifications. The Adafruit IO watchdog is removed with Adafruit
 IO.
-
-## Housekeeping
-
-- The README's "Notes and gotchas" still describes the esptool upload crash and
-  the esptool 4.x workaround; the pinned platform (55.03.37) fixed that.
 
 ## Open questions
 
