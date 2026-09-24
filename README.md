@@ -10,8 +10,10 @@
 > - **No Adafruit IO.** Data goes to Telegraf/InfluxDB on the LAN and
 >   notifications go to ntfy.sh:
 >   - Pump ON/OFF events as they happen, plus water level, temperature, humidity
->     and pump activity every 10 minutes, shown on a sump-specific Grafana
->     dashboard.
+>     and pump activity every 10 minutes, sent to Telegraf over HTTP and shown
+>     on a sump-specific Grafana dashboard. Grafana alerts via ntfy if the
+>     device goes silent.
+>   - Real-time pump ON/OFF pushes to ntfy.
 >   - A daily ntfy report just before the 3 AM reboot: pump state, water level,
 >     temperature and humidity.
 >   - High-water alerts via ntfy, repeated every 30 minutes until the level

@@ -20,6 +20,21 @@ Nothing below is implemented yet unless marked done. Last updated 2026-09-24.
 - **No float switch for now.** It can be added later on a spare GPIO as an
   independent high-water check.
 
+### Pit
+
+- About 2 ft (61 cm) deep, empty at the moment.
+- The highest the water can reach is the rim (beyond that it floods the
+  floor), so with the 30 cm rule **the transducer sits at least 30 cm above the
+  rim**, e.g. on a bracket or riser on the lid. Distance to the empty pit floor
+  is then about 90+ cm, well within the sensor's range (it reads to several
+  metres).
+- If a pipe is used as the riser, keep it wide (4" or more) or test it: the
+  sensor's beam is fairly wide, and a narrow pipe can return echoes from its
+  own walls.
+- High water is then roughly "distance from sensor under ~40 cm" (rim + 30 cm
+  + margin); the exact threshold is set once the pump's normal on level is
+  known.
+
 ### JSN-SR04T wiring
 
 The sensor runs on 5 V and its Echo output is 5 V, but ESP32-C3 pins take
@@ -114,10 +129,12 @@ the cloud, which also frees flash for the OTA partitions.
   passes it straight through with no JSON parsing config.
 - **Buffering:** if the server can't be reached, points queue in RAM (24 hours of
   10-minute readings is about 10 KB) and are sent in order when it's back.
-- **Transport — open, see Open questions:** MQTT to a LAN broker (Mosquitto),
-  read by Telegraf's `mqtt_consumer`, or HTTP POST straight to Telegraf's
-  `http_listener_v2`.
-- **Server outage handling:** a Telegraf/broker outage does not reboot the
+- **Transport: HTTP POST straight to Telegraf's `http_listener_v2`** on the LAN
+  (plain HTTP, no broker). Chosen over MQTT for simplicity: no broker to run, no
+  always-open connection to watch, and the firmware already uses HTTP for ntfy.
+  MQTT's efficiency edge doesn't matter on a mains-powered device sending a few
+  small messages an hour. The Telegraf URL goes in `secrets.h`.
+- **Server outage handling:** a Telegraf outage does not reboot the
   board (a reboot can't fix the server). After 30 minutes without a successful
   send, one ntfy alert; another when sending recovers.
 - **Grafana:** a sump-specific dashboard with one shared time axis: pump state
@@ -144,6 +161,11 @@ the cloud, which also frees flash for the OTA partitions.
   also counts), send an urgent-priority alert, then repeat every 30 minutes
   until the level drops back below the threshold minus a few cm of
   hysteresis, then send one "all clear".
+- **Pump ON/OFF, in real time:** a push as soon as each start or stop is
+  confirmed (the 3 s debounce), with the run length on OFF. The old
+  one-per-minute window and "skip if it flipped back" logic are removed, so
+  every cycle is reported. Low/default priority, so a busy wet-season day
+  doesn't make a stream of noisy alerts.
 - **Pump ran but the level didn't drop:** compare the level just before a run
   with the level just after. If it fell less than a minimum amount (a few cm,
   tuned from real runs), alert with both readings and the run length (clogged
@@ -152,8 +174,16 @@ the cloud, which also frees flash for the OTA partitions.
 - **Sensor failures:** level sensor (sustained missing echoes), AHT20 and ADXL345.
 - **LAN server unreachable** for 30 minutes, and recovered (see above).
 - Reboot-reason notifications, OTA updates and rollbacks, as before.
-- All alarms are sent regardless of the `NOTIFY_RUN_STATE` start/stop pushes
-  (which default to off now that events reach Grafana directly).
+- **Device silent (Grafana alert, not firmware):** Grafana alerting sends to
+  ntfy when no sump data has reached InfluxDB for ~30 minutes. It covers what
+  the board can't report itself: dead board, power loss, Wi-Fi gone, or a
+  firmware hang the watchdogs didn't catch. The 10-minute readings act as the
+  heartbeat.
+- **ntfy.sh limits:** anonymous use of ntfy.sh has per-IP rate and daily message
+  limits, shared with the `pump` board and anything else on the same public IP.
+  Check the current limits against a heavy wet-season day (many cycles × two
+  pushes each); the alarms matter more than the ON/OFF pushes if it ever gets
+  close.
 
 ### Device name
 
@@ -193,9 +223,8 @@ IO.
 
 ## Open questions
 
-- Pit dimensions: sensor mounting height, the pump's on/off levels, and the
-  high-water threshold.
-- LAN transport: MQTT (needs a broker such as Mosquitto on the LAN) or HTTP
-  straight to Telegraf. Is a broker already running?
-- Monitoring the monitor: the device can't report its own death. Add a Grafana
-  alert (to ntfy) when no sump data has arrived for ~30 minutes?
+- Sensor mounting: how the riser or bracket puts the transducer 30+ cm above the
+  rim (see Pit below).
+- The pump's on/off levels and the high-water threshold. The firmware logs the
+  level at every pump start and stop, so these can be read from the first few
+  real cycles rather than measured by hand.
