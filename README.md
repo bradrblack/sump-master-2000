@@ -5,14 +5,25 @@
 > multi-device vibration monitor; Sump Master 2000 is sump-pump specific and
 > adds:
 >
-> - **Water level** from an ultrasonic distance sensor (HC-SR04 family) over the pit.
+> - **Water level** from a JSN-SR04T waterproof ultrasonic sensor over the pit.
 > - **Temperature / humidity** (AHT20 on the I2C bus).
-> - Level and temperature/humidity readings published every 10 minutes to Adafruit
->   IO and on to InfluxDB via Telegraf, alongside the existing pump ON/OFF events.
+> - **No Adafruit IO.** Data goes to Telegraf/InfluxDB on the LAN and
+>   notifications go to ntfy.sh:
+>   - Pump ON/OFF events as they happen, plus water level, temperature, humidity
+>     and pump activity every 10 minutes, shown on a sump-specific Grafana
+>     dashboard.
+>   - A daily ntfy report just before the 3 AM reboot: pump state, water level,
+>     temperature and humidity.
+>   - High-water alerts via ntfy, repeated every 30 minutes until the level
+>     drops, and an alert when the pump runs but the level doesn't drop.
+> - **OTA updates** pushed from the Mac over the home network, with automatic
+>   rollback if new firmware isn't healthy.
 >
-> The sketch is `src/sm2k.ino`. These additions are in the design stage. The
-> rest of this README describes the behavior inherited from vibration-monitor,
-> which is unchanged so far.
+> The sketch is `src/sm2k.ino`. These additions are in the design stage; see
+> [PLAN.md](PLAN.md) for the full design and open questions. The rest of this
+> README describes the behavior inherited from vibration-monitor, which is
+> unchanged so far. Its Adafruit IO sections will be replaced as the new
+> design is implemented.
 
 # Device Monitor via Vibration (inherited)
 

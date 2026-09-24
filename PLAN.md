@@ -1,7 +1,7 @@
 # Sump Master 2000 — plan
 
 Design plan for the sump-specific additions to the fork of vibration-monitor.
-Nothing below is implemented yet unless marked done. Last updated 2026-09-23.
+Nothing below is implemented yet unless marked done. Last updated 2026-09-24.
 
 ## Hardware
 
@@ -93,31 +93,72 @@ Notes:
 - AHT20 readings are CRC-checked, and its status/calibration bit is watched as
   a dead-sensor check (like the ADXL345 device-ID watchdog).
 
-### Alarms (ntfy)
+### No Adafruit IO
 
-- **High water:** alert when the level passes the threshold (a blind-zone reading
-  also counts). Hysteresis of a few cm so one event gives one alert, then an
-  "all clear" when it drops back.
+Adafruit IO is dropped entirely. Data goes to the LAN (Telegraf → InfluxDB →
+Grafana) and notifications go to ntfy.sh. This removes the Adafruit IO library
+(and its `WiFi101`/`WiFiNINA` `lib_ignore` workaround), the Adafruit IO
+watchdog, its one-event-per-minute rate limit and the TLS/MQTT connection to
+the cloud, which also frees flash for the OTA partitions.
+
+### Data to the LAN (Telegraf → InfluxDB)
+
+- **Readings every 10 minutes:** water level, temperature, humidity, pump state,
+  and pump cycles and run time for the period.
+- **Pump ON/OFF events** are sent as they happen (no longer rate limited), with
+  the run length on OFF.
+- Each point carries the device's own NTP timestamp, so late or buffered data
+  lands at the right time in InfluxDB.
+- The device sends InfluxDB line protocol (e.g.
+  `sump,device=sump level_cm=41.2,temp_c=17.9,humidity=71.5 <ns>`), so Telegraf
+  passes it straight through with no JSON parsing config.
+- **Buffering:** if the server can't be reached, points queue in RAM (24 hours of
+  10-minute readings is about 10 KB) and are sent in order when it's back.
+- **Transport — open, see Open questions:** MQTT to a LAN broker (Mosquitto),
+  read by Telegraf's `mqtt_consumer`, or HTTP POST straight to Telegraf's
+  `http_listener_v2`.
+- **Server outage handling:** a Telegraf/broker outage does not reboot the
+  board (a reboot can't fix the server). After 30 minutes without a successful
+  send, one ntfy alert; another when sending recovers.
+- **Grafana:** a sump-specific dashboard with one shared time axis: pump state
+  (state timeline), water level with the high-water threshold line,
+  temperature and humidity, and annotations for alarms and reboots.
+- The inherited `telegraf/appliance-events.*` and
+  `grafana/appliance-monitor.json` (Adafruit IO based, and belonging to
+  vibration-monitor) are replaced by sump-specific configs.
+
+### Notifications (ntfy)
+
+- **Daily report, just before the 3 AM reboot:** pump state (on/off), water
+  level, temperature and humidity. Suggested extras: pump cycles and total run
+  time for the last 24 hours, the highest level seen, the longest run, and the
+  firmware version.
+  - Sent at low ntfy priority, so it's waiting on the phone in the morning
+    without making a sound at 3 AM.
+  - It replaces the separate "Daily scheduled reboot" push
+    (`NOTIFY_DAILY_REBOOT` off), so there's one message a night. It doubles as
+    the "still alive" heartbeat. Exception reboots are still pushed.
+  - If the pump is running at 3 AM the reboot is already held off; the report
+    goes out when the reboot actually happens.
+- **High water:** when the level passes the threshold (TBD; a blind-zone reading
+  also counts), send an urgent-priority alert, then repeat every 30 minutes
+  until the level drops back below the threshold minus a few cm of
+  hysteresis, then send one "all clear".
 - **Pump ran but the level didn't drop:** compare the level just before a run
   with the level just after. If it fell less than a minimum amount (a few cm,
   tuned from real runs), alert with both readings and the run length (clogged
   discharge, stuck check valve, pump running dry). If readings around the run
   are missing or suspect, report "can't verify" instead of guessing.
-- Both alarms are sent regardless of the `NOTIFY_RUN_STATE` start/stop pushes.
+- **Sensor failures:** level sensor (sustained missing echoes), AHT20 and ADXL345.
+- **LAN server unreachable** for 30 minutes, and recovered (see above).
+- Reboot-reason notifications, OTA updates and rollbacks, as before.
+- All alarms are sent regardless of the `NOTIFY_RUN_STATE` start/stop pushes
+  (which default to off now that events reach Grafana directly).
 
-### Reporting
+### Device name
 
-- **Device name:** `sump` (`[env:sump]`). The existing `pump` board keeps running
-  under its own name while its reliability testing continues, and will be
-  renamed later.
-- **Pump ON/OFF events:** unchanged, on the shared `appliance-events` feed as
-  `"device":"sump"`.
-- **Readings:** every 10 minutes, one JSON message on a new Adafruit IO feed
-  named `sump`: water level, temperature, humidity, pump cycles and run time for
-  the period. JSON only, no separate numeric feeds or Adafruit IO gauges.
-- **Telegraf:** a new config subscribes to the `sump` feed and writes the
-  readings to InfluxDB. **Grafana:** new panels for level, temperature and
-  humidity, alongside the existing appliance timeline.
+`sump` (`[env:sump]`). The existing `pump` board keeps running under its own
+name while its reliability testing continues, and will be renamed later.
 
 ### OTA updates
 
@@ -126,12 +167,13 @@ Notes:
 - Partition table changes to `min_spiffs.csv` (1.9 MB per app slot; the default
   1.25 MB is too tight). This can't be changed over the air, so **the first flash
   of the new firmware must be over USB**.
-- Updates are refused while the pump is running or events are queued.
+- Updates are refused while the pump is running or data is queued.
 - Automatic rollback: new firmware boots in trial mode and is marked good only
-  after a few minutes of health (Wi-Fi and Adafruit IO up, all sensors
-  answering); otherwise the board returns to the previous firmware. Check whether
-  the pioarduino bootloader has rollback enabled; if not, implement it with a
-  boot counter in NVS, checked first thing in `setup()`.
+  after a few minutes of health (Wi-Fi up, all sensors answering); otherwise the
+  board returns to the previous firmware. LAN server reachability is not part of
+  the check, so a server outage during an update can't trigger a rollback. Check
+  whether the pioarduino bootloader has rollback enabled; if not, implement it
+  with a boot counter in NVS, checked first thing in `setup()`.
 - The hardware watchdog is fed during the upload, and the nightly reboot is held
   off during an update.
 - ntfy reports updates ("updated A → B") and rollbacks.
@@ -140,8 +182,9 @@ Notes:
 
 ### Kept from vibration-monitor
 
-All existing watchdogs (Wi-Fi, Adafruit IO, I2C sensor, 30 s task watchdog), the
-3 AM nightly reboot, and reboot-reason notifications.
+The Wi-Fi, I2C sensor and 30 s task watchdogs, the 3 AM nightly reboot, and
+reboot-reason notifications. The Adafruit IO watchdog is removed with Adafruit
+IO.
 
 ## Housekeeping
 
@@ -152,3 +195,7 @@ All existing watchdogs (Wi-Fi, Adafruit IO, I2C sensor, 30 s task watchdog), the
 
 - Pit dimensions: sensor mounting height, the pump's on/off levels, and the
   high-water threshold.
+- LAN transport: MQTT (needs a broker such as Mosquitto on the LAN) or HTTP
+  straight to Telegraf. Is a broker already running?
+- Monitoring the monitor: the device can't report its own death. Add a Grafana
+  alert (to ntfy) when no sump data has arrived for ~30 minutes?
