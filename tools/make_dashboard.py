@@ -268,17 +268,14 @@ panels.append(panel(
 
 # ---- Row 7: board health --------------------------------------------------------------
 panels.append(panel(
-    "timeseries", "Board: Wi-Fi signal", 0, 51, 12, 7,
-    [tgt("A", series("sump", "rssi", "Wi-Fi RSSI"))],
-    dict(TS_DEFAULTS, unit="dBm", decimals=0),
-    options={"legend": {"showLegend": False}, "tooltip": {"mode": "single"}},
-    description="Wi-Fi signal strength at each 10-minute reading. Below about -80 dBm, "
-                "expect dropouts."))
-panels.append(panel(
-    "timeseries", "Board: free memory", 12, 51, 12, 7,
-    [tgt("A", series("sump", "heap", "Free heap"))],
-    dict(TS_DEFAULTS, unit="bytes", decimals=0),
-    options={"legend": {"showLegend": False}, "tooltip": {"mode": "single"}},
+    "timeseries", "Board: Wi-Fi signal and free memory", 0, 51, 24, 7,
+    [tgt("A", series("sump", "rssi", "Wi-Fi RSSI")),
+     tgt("B", series("sump", "heap", "Free heap"))],
+    dict(TS_DEFAULTS, decimals=0),
+    [by_name("Wi-Fi RSSI", {"unit": "dBm"}),
+     by_name("Free heap", {"unit": "bytes", "custom.axisPlacement": "right"})],
+    {"legend": {"showLegend": True, "displayMode": "list", "placement": "bottom"},
+     "tooltip": {"mode": "multi"}},
     description="A steady fall in free heap between nightly reboots would point to a leak."))
 
 annotations = {"list": [
