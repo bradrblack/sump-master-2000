@@ -18,7 +18,7 @@
 #include "jsn_sr04t.h"
 
 // Bump on each flash you want to identify later -- format: YYYY-MM-DDrN.
-#define FIRMWARE_VERSION "2026-09-24r1"
+#define FIRMWARE_VERSION "2026-09-24r2"
 
 // ---- Configuration (build flags, see platformio.ini) ------------------------
 // DEVICE_NAME appears in every ntfy message and as the InfluxDB "device" tag;
@@ -164,11 +164,12 @@ const uint32_t WIFI_DOWN_REBOOT_MS     = 120000;  // running: reboot if WiFi dow
 // beginAccel(). Either chip is accepted.
 // The accelerometer is polled for its fixed device ID; a wedged or unplugged I2C
 // bus otherwise just produces a stream of zeros (looks like an idle pump).
+// If it's missing (at boot or later) the board keeps running without it --
+// water level, alarms and reporting matter more than pump on/off -- pushes
+// one alert, and retries it (with I2C bus recovery) every ACCEL_RETRY_MS.
 const uint32_t SENSOR_CHECK_INTERVAL_MS = 30000;
-const int      SENSOR_FAIL_LIMIT        = 3;       // consecutive failed checks => reboot
-const uint32_t SENSOR_BOOT_RETRY_MS     = 5000;    // at boot: retry detection this often
-const uint32_t SENSOR_NOTIFY_AFTER_MS   = 60000;   // at boot: push a notification after this long
-const uint32_t SENSOR_BOOT_REBOOT_MS    = 1800000; // at boot: reboot if still missing after 30 min
+const int      SENSOR_FAIL_LIMIT        = 3;       // consecutive failed checks => treat as missing
+const uint32_t ACCEL_RETRY_MS           = 30000;
 const uint8_t  ADXL345_DEVICE_ID        = 0xE5;
 const uint8_t  ADXL346_DEVICE_ID        = 0xE6;
 
@@ -287,6 +288,10 @@ uint32_t lastWifiAttempt = 0;
 uint32_t wifiDownSince = 0;    // 0 = WiFi currently up
 int      lastRebootDay = -1;   // persisted in NVS so the daily reboot fires once, not in a loop
 int      sensorFails = 0;
+bool     accelOk = false;      // accelerometer detected and answering
+uint32_t accelOkSinceMs = 0;   // when it (re)started answering
+uint32_t lastAccelRetryMs = 0;
+bool     accelAlerted = false;
 uint32_t lastSensorCheck = 0;
 bool     bootCorrectionDone = false;
 bool     otaTrial = false;     // running a fresh OTA image that hasn't passed its health check
@@ -651,7 +656,7 @@ void saveLastRecordedState(int state) {
 // ==========================================
 uint8_t currentHealth(uint32_t now) {
   uint8_t h = 0;
-  if (sensorFails == 0) h |= HEALTH_ACCEL;
+  if (accelOk) h |= HEALTH_ACCEL;
   if (lastEchoMs && now - lastEchoMs < LEVEL_STALE_MS) h |= HEALTH_LEVEL;
   if (ahtFresh(now)) h |= HEALTH_AHT;
   return h;
@@ -842,58 +847,85 @@ bool beginAccel() {
   return false;
 }
 
-// Waits for the accelerometer at boot. If it's missing: keep retrying, push a
-// notification after a minute (so a dead sensor isn't silent), and reboot after
-// 30 minutes as a last resort (the reason is pushed on the next boot).
-void setupSensor() {
-  i2cBusRecover();
-  Wire.begin(SDA_PIN, SCL_PIN, 400000);
-
-  uint32_t start = millis();
-  bool notified = false;
-  while (!beginAccel()) {
-    logf("[I2C] accelerometer (ADXL346) not detected at boot -- check wiring (SDA=%d SCL=%d)", SDA_PIN, SCL_PIN);
-    i2cScanLog();
-    uint32_t waited = millis() - start;
-    if (!notified && waited >= SENSOR_NOTIFY_AFTER_MS) {
-      notified = true;
-      notify(PRIO_ALERT, "warning", DEVICE_NAME ": accelerometer missing",
-             "Accelerometer (ADXL346) not responding on I2C since boot at %s", logTimestamp());
-    }
-    serviceNtfy(millis());
-    // OTA stays available, so a fix can still be pushed.
-    ArduinoOTA.handle();
-    if (otaDone) restartAfterOta();
-    // An update that loses the accelerometer rolls back rather than waiting.
-    if (otaTrial && (otaRequiredHealth & HEALTH_ACCEL) && millis() >= OTA_TRIAL_TIMEOUT_MS) {
-      failOtaTrial("accelerometer not detected");
-    }
-    if (waited >= SENSOR_BOOT_REBOOT_MS) {
-      restartWithReason("Accelerometer not detected at boot (I2C)");
-    }
-    delay(SENSOR_BOOT_RETRY_MS);
-  }
+// Initializes the accelerometer if it answers.
+bool startAccel() {
+  if (!beginAccel()) return false;
   accel.setRange(ADXL345_RANGE_16_G);
   accel.setDataRate(ADXL345_DATARATE_400_HZ);
   readSample(bx, by, bz);
+  accelOk = true;
+  accelOkSinceMs = millis();
+  sensorFails = 0;
   logf("[I2C] accelerometer initialized");
+  return true;
 }
 
-// Periodically confirms the accelerometer still answers over I2C. Without this a
-// disconnected/wedged sensor reads as zeros and looks like an idle pump.
+// Carries on without the accelerometer: pump detection pauses (the run state
+// is frozen, not guessed), everything else continues, and one push says so.
+void accelLost(const char *why) {
+  accelOk = false;
+  lastAccelRetryMs = millis();
+  if (deviceRunning) {
+    // Lost mid-run: the run's end can't be known. Close it out (no run time)
+    // so a stale "running" doesn't hold off OTA and the nightly reboot.
+    deviceRunning = false;
+    dropCheckPending = false;
+    tgPoint("sump_event", "event=\"stop\",running=0i,note=\"sensor_lost\"");
+    lastRecordedState = 0;
+    saveLastRecordedState(0);
+  }
+  aboveSince = 0;
+  belowSince = 0;
+  ledOn = false;
+  setLed(false);
+  logf("[I2C] accelerometer %s; pump detection paused, retrying every %lu s",
+       why, (unsigned long)(ACCEL_RETRY_MS / 1000));
+  if (accelAlerted) return;
+  accelAlerted = true;
+  notify(PRIO_ALERT, "warning", DEVICE_NAME ": accelerometer not responding",
+         "Accelerometer (ADXL346) %s. Pump on/off detection is paused; water level, alarms "
+         "and reporting carry on. Retrying every %lu s.", why, (unsigned long)(ACCEL_RETRY_MS / 1000));
+}
+
+// Finds the accelerometer at boot, without waiting for it: if it's missing
+// the board runs without it (see accelLost()).
+void setupSensor() {
+  i2cBusRecover();
+  Wire.begin(SDA_PIN, SCL_PIN, 400000);
+  if (startAccel()) return;
+  logf("[I2C] accelerometer (ADXL346) not detected at boot -- check wiring (SDA=%d SCL=%d)", SDA_PIN, SCL_PIN);
+  i2cScanLog();
+  accelLost("not detected at boot");
+}
+
+// Periodically confirms the accelerometer still answers over I2C (without this
+// a disconnected/wedged sensor reads as zeros and looks like an idle pump), and
+// retries it while it's missing.
 void checkSensorWatchdog(uint32_t now) {
+  if (!accelOk) {
+    if (now - lastAccelRetryMs < ACCEL_RETRY_MS) return;
+    lastAccelRetryMs = now;
+    // A sensor holding SDA low needs the same bus recovery as at boot.
+    Wire.end();
+    i2cBusRecover();
+    Wire.begin(SDA_PIN, SCL_PIN, 400000);
+    if (startAccel() && accelAlerted) {
+      accelAlerted = false;
+      notify(PRIO_INFO, "white_check_mark", DEVICE_NAME ": accelerometer OK",
+             "Accelerometer answering again; pump on/off detection resumed.");
+    }
+    return;
+  }
+
   if (now - lastSensorCheck < SENSOR_CHECK_INTERVAL_MS) return;
   lastSensorCheck = now;
-
   if (isAccelId(accel.getDeviceID())) {
     sensorFails = 0;
     return;
   }
   sensorFails++;
   logf("[I2C] accelerometer not responding (%d/%d)", sensorFails, SENSOR_FAIL_LIMIT);
-  if (sensorFails >= SENSOR_FAIL_LIMIT) {
-    restartWithReason("Accelerometer not responding (I2C)");
-  }
+  if (sensorFails >= SENSOR_FAIL_LIMIT) accelLost("stopped responding on I2C");
 }
 
 // ==========================================
@@ -995,6 +1027,7 @@ void setRunState(bool running, uint32_t eventMs) {
 // Called once per window with that window's RMS.
 void processWindow(float rms, uint32_t now) {
   lastRms = rms;
+  if (!accelOk) return;  // no pump detection without the accelerometer
 
   // Instantaneous vibration indicator (with hysteresis).
   if (rms > ON_RMS_THRESHOLD) ledOn = true;
@@ -1031,7 +1064,8 @@ void processWindow(float rms, uint32_t now) {
 // running. After a short settle time, if it's really idle, record a stop
 // (marked as a restart correction, with no run length).
 void checkBootStateCorrection(uint32_t now) {
-  if (bootCorrectionDone || now < BOOT_SETTLE_MS) return;
+  // Needs the pump observed (accelerometer answering) for the settle time.
+  if (bootCorrectionDone || !accelOk || now - accelOkSinceMs < BOOT_SETTLE_MS) return;
   bootCorrectionDone = true;
   if (lastRecordedState == 1 && !deviceRunning) {
     logf("Last event was a start but the pump is idle after a restart; correcting");
@@ -1259,6 +1293,7 @@ void checkPeriodicReading(uint32_t now) {
     addField(fields, sizeof(fields), "humidity=%.1f", humidity);
   }
   addField(fields, sizeof(fields), "running=%di", deviceRunning ? 1 : 0);
+  addField(fields, sizeof(fields), "pump_sensor=%di", accelOk ? 1 : 0);
   addField(fields, sizeof(fields), "cycles=%lui", (unsigned long)periodCycles);
   addField(fields, sizeof(fields), "run_s=%.1f", periodRunMs / 1000.0f);
   addField(fields, sizeof(fields), "rssi=%di", (int)WiFi.RSSI());
@@ -1297,7 +1332,8 @@ void sendDailyReport(uint32_t now) {
   snprintf(m.title, sizeof(m.title), "%s daily report", DEVICE_NAME);
   snprintf(m.body, sizeof(m.body),
            "Pump: %s\nWater: %s\nAir: %s\n%s\nFirmware %s",
-           deviceRunning ? "on" : "off", level, climate, stats, FIRMWARE_VERSION);
+           !accelOk ? "unknown (accelerometer not responding)" : deviceRunning ? "on" : "off",
+           level, climate, stats, FIRMWARE_VERSION);
   m.priority = PRIO_REPORT;
   m.tags = "clipboard";
   logf("[ntfy] daily report:\n%s", m.body);
@@ -1486,8 +1522,8 @@ void loop(void) {
   nextSampleUs += SAMPLE_PERIOD_US;
   if ((int32_t)(nowUs - nextSampleUs) > 0) nextSampleUs = nowUs + SAMPLE_PERIOD_US; // fell behind
 
-  float x, y, z;
-  readSample(x, y, z);
+  float x = bx, y = by, z = bz;  // no signal while the accelerometer is missing
+  if (accelOk) readSample(x, y, z);
 
   float dx = x - bx, dy = y - by, dz = z - bz;
   sumSq += dx * dx + dy * dy + dz * dz;
@@ -1528,7 +1564,7 @@ void loop(void) {
     if (ahtFresh(now)) snprintf(air, sizeof(air), "%.1fC/%.0f%%", tempC, humidity);
     else snprintf(air, sizeof(air), "--");
     logf("rms=%.3f state=%s level=%s air=%s wifi=%s tgq=%d", lastRms,
-         deviceRunning ? "RUNNING" : "idle", level, air,
+         !accelOk ? "no-accel" : deviceRunning ? "RUNNING" : "idle", level, air,
          WiFi.status() == WL_CONNECTED ? "up" : "down", tgCount);
   }
 }

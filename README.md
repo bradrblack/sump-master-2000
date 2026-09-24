@@ -121,8 +121,8 @@ points land at the right time. All points are tagged `device=sump`.
 
 | Measurement | When | Fields |
 |---|---|---|
-| `sump` | every 10 min, on the clock | `level_cm`, `distance_cm`, `level_status` (`ok`/`near_limit`/`missing`), `temp_c`, `humidity`, `running`, `cycles` and `run_s` (for the 10 minutes), `rssi`, `heap` |
-| `sump_event` | pump start/stop | `event`, `running`, `seconds` (stop), `level_cm` (start); `note="restart"` on a post-reboot correction |
+| `sump` | every 10 min, on the clock | `level_cm`, `distance_cm`, `level_status` (`ok`/`near_limit`/`missing`), `temp_c`, `humidity`, `running`, `pump_sensor` (1 = accelerometer answering), `cycles` and `run_s` (for the 10 minutes), `rssi`, `heap` |
+| `sump_event` | pump start/stop | `event`, `running`, `seconds` (stop), `level_cm` (start); `note="restart"` on a post-reboot correction, `note="sensor_lost"` if the accelerometer dropped out mid-run |
 | `sump_cycle` | after each run | `seconds`, `level_before_cm`, `level_after_cm`, `drop_cm`, `result` (`ok`/`no_drop`/`unverified`) |
 | `sump_alarm` | high water on/off | `type`, `active`, `level_cm` |
 | `sump_boot` | each boot | `version`, `reason` |
@@ -202,8 +202,7 @@ firmware: recover on its own where possible, and never fail silently.
 | **Bounded Wi-Fi connect at boot** | If Wi-Fi isn't up within 30 s, reboot and retry instead of hanging. |
 | **Wi-Fi watchdog** | If Wi-Fi drops it resets the radio and retries every 30 s; if it stays down for 2 minutes, reboot. |
 | **Telegraf outage** | Doesn't reboot (that can't fix the server): data queues and one push says so. |
-| **Accelerometer watchdog** | Every 30 s the accelerometer's device ID is read. Three failed checks in a row (unplugged, loose wire, wedged bus) reboot the board. Without this a dead sensor reads as zeros and looks like an idle pump. |
-| **Sensor check at boot** | I2C bus recovery first (clocks SCL to release a bus a sensor is holding low, which a reboot alone doesn't clear), then waits for the accelerometer. If it never appears it pushes a notification after 1 minute and reboots after 30 minutes. OTA stays available meanwhile. |
+| **Accelerometer optional** | Every 30 s the accelerometer's device ID is read (without this a dead sensor reads as zeros and looks like an idle pump). If it's missing at boot, or fails three checks in a row, the board **keeps running without it**: pump on/off detection pauses, while water level, alarms, reporting and OTA carry on. One push says so, it's retried every 30 s with I2C bus recovery (clocking SCL to release a bus a sensor is holding low), and a push says when it's back. A run in progress when it drops out is closed with `note="sensor_lost"` and no run time. |
 | **Level and AHT20 watchdogs** | Push an alert when there's been no reliable echo for 2 minutes, or no AHT20 reading for 5 minutes, and again when they recover. |
 | **Suspect level readings** | A jump of more than 15 cm between readings is held until the next reading confirms it. |
 | **Task watchdog** | A 30 s hardware watchdog resets a hung main loop; the reset is reported on the next boot. |

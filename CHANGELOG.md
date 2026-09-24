@@ -6,6 +6,14 @@ to `FIRMWARE_VERSION` in `src/sm2k.ino`.
 Sump Master 2000 is a fork of the vibration-monitor project, taken at
 `2026-09-22r1`. Entries below that point are the original project's history.
 
+## 2026-09-24r2
+
+- Run without the accelerometer instead of waiting for it at boot (and
+  rebooting every 30 minutes). If it's missing at boot or stops answering,
+  pump detection pauses, everything else carries on, one push says so, and it's
+  retried every 30 s with I2C bus recovery. It no longer reboots the board.
+- New `pump_sensor` field in the 10-minute reading.
+
 ## 2026-09-24r1
 
 First Sump Master 2000 firmware (not yet tested on hardware).
