@@ -162,7 +162,9 @@ the cloud, which also frees flash for the OTA partitions.
   until the level drops back below the threshold minus a few cm of
   hysteresis, then send one "all clear".
 - **Pump ON/OFF, in real time:** a push as soon as each start or stop is
-  confirmed (the 3 s debounce), with the run length on OFF. The old
+  confirmed (the 3 s debounce). **The OFF push always includes the run time**
+  (e.g. "sump stopped at 09:12:30 (ran 28.8 s)"), as the current firmware
+  does; it's the most useful number for spotting a failing pump or float. The old
   one-per-minute window and "skip if it flipped back" logic are removed, so
   every cycle is reported. Low/default priority, so a busy wet-season day
   doesn't make a stream of noisy alerts.
