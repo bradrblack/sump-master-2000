@@ -12,7 +12,9 @@ const int64_t PING_TIMEOUT_US = 70000;
 void JsnSr04t::begin() {
   pinMode(_trig, OUTPUT);
   digitalWrite(_trig, LOW);
-  pinMode(_echo, INPUT);
+  // Weak pull-down so a disconnected Echo can't float and fire the interrupt
+  // from radio noise (the 2 k divider resistor to GND overrides it when wired).
+  pinMode(_echo, INPUT_PULLDOWN);
   attachInterruptArg(_echo, onEcho, this, CHANGE);
 }
 

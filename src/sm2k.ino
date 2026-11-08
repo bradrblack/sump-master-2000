@@ -18,7 +18,7 @@
 #include "jsn_sr04t.h"
 
 // Bump on each flash you want to identify later -- format: YYYY-MM-DDrN.
-#define FIRMWARE_VERSION "2026-09-24r3"
+#define FIRMWARE_VERSION "2026-11-08r4"
 
 // ---- Configuration (build flags, see platformio.ini) ------------------------
 // DEVICE_NAME appears in every ntfy message and as the InfluxDB "device" tag;
@@ -72,23 +72,27 @@
 #define NVS_NS "sm2k"
 
 const char *BANNER =
-R"( ___                   __  __         _             ___ __   __   __
-/ __|_  _ _ __  _ __  |  \/  |__ _ __| |_ ___ _ _  |_  )  \ /  \ /  \
-\__ \ || | '  \| '_ \ | |\/| / _` (_-<  _/ -_) '_|  / / () | () | () |
-|___/\_,_|_|_|_| .__/ |_|  |_\__,_/__/\__\___|_|   /___\__/ \__/ \__/
-               |_|)";
+R"(               ____  _
+ ___ _ __ ___ |___ \| | __
+/ __| '_ ` _ \  __) | |/ /
+\__ \ | | | | |/ __/|   <
+|___/_| |_| |_|_____|_|\_\
+
+)";
 
 // ---- Pins -----------------------------------------------------------------
 const int SDA_PIN = 5;
 const int SCL_PIN = 6;   // GPIO 8/9 are LED/boot pins on this board
+const uint32_t I2C_CLOCK_HZ = 100000;  // 400 kHz was unreliable on the bench (50 kHz made the sampling loop late)
 // JSN-SR04T: Trig direct, Echo through a 5 V -> 3.3 V divider. GPIO 2, 8 and 9
 // are boot strapping pins on the C3, so they're avoided.
 const int LEVEL_TRIG_PIN = 3;
 const int LEVEL_ECHO_PIN = 4;
 
-const int  LED_PIN        = 8;
-const bool LED_ACTIVE_LOW = true;  // set false if the LED lights when the pin is HIGH
-const uint32_t LED_BLINK_HALF_PERIOD_MS = 500;  // blink rate while the pump is running
+// Onboard NeoPixel (WS2812) status LED: red = high water, blue = pump running,
+// green = all clear. Dimmed because a full-brightness NeoPixel is blinding.
+const int     LED_PIN        = 8;
+const uint8_t LED_BRIGHTNESS = 16;  // 0-255
 
 // ---- Vibration detection --------------------------------------------------
 // Samples are high-passed against a slow per-axis baseline (removes gravity and
@@ -208,7 +212,6 @@ double sumSq = 0;
 uint16_t sampleCount = 0;
 uint32_t nextSampleUs = 0;
 
-bool ledOn = false;            // instantaneous vibration indicator
 bool deviceRunning = false;
 uint32_t aboveSince = 0;       // 0 = not currently above ON threshold
 uint32_t belowSince = 0;       // 0 = not currently below OFF threshold
@@ -776,8 +779,17 @@ void serviceOta() {
 // ==========================================
 // Pump (vibration) sensor
 // ==========================================
-void setLed(bool on) {
-  digitalWrite(LED_PIN, (on != LED_ACTIVE_LOW) ? HIGH : LOW);
+// Red (high water) takes priority over blue (pump running); otherwise green.
+// Only writes to the LED when the colour changes.
+void updateStatusLed() {
+  static int lastColor = -1;
+  int color = highWater ? 0 : deviceRunning ? 1 : 2;
+  if (color == lastColor) return;
+  lastColor = color;
+  const uint8_t b = LED_BRIGHTNESS;
+  if (color == 0) rgbLedWrite(LED_PIN, b, 0, 0);
+  else if (color == 1) rgbLedWrite(LED_PIN, 0, 0, b);
+  else rgbLedWrite(LED_PIN, 0, b, 0);
 }
 
 void readSample(float &x, float &y, float &z) {
@@ -878,8 +890,6 @@ void accelLost(const char *why) {
   }
   aboveSince = 0;
   belowSince = 0;
-  ledOn = false;
-  setLed(false);
   logf("[I2C] accelerometer %s; pump detection paused, retrying every %lu s",
        why, (unsigned long)(ACCEL_RETRY_MS / 1000));
   if (accelAlerted) return;
@@ -892,9 +902,20 @@ void accelLost(const char *why) {
 // Finds the accelerometer at boot, without waiting for it: if it's missing
 // the board runs without it (see accelLost()).
 void setupSensor() {
-  i2cBusRecover();
-  Wire.begin(SDA_PIN, SCL_PIN, 400000);
-  if (startAccel()) return;
+  // On a cold power-up the first bus start can leave the sensors unreachable
+  // (every read fails, or returns garbage); stopping the bus, recovering it and
+  // starting it again has always worked. That's what the 30 s retry does, so do
+  // it here too, a few times, before giving up and waiting for that retry.
+  for (int attempt = 1; attempt <= 3; attempt++) {
+    if (attempt > 1) {
+      logf("[I2C] accelerometer not found, restarting the bus (try %d of 3)", attempt);
+      Wire.end();
+      delay(200);
+    }
+    i2cBusRecover();
+    Wire.begin(SDA_PIN, SCL_PIN, I2C_CLOCK_HZ);
+    if (startAccel()) return;
+  }
   logf("[I2C] accelerometer (ADXL346) not detected at boot -- check wiring (SDA=%d SCL=%d)", SDA_PIN, SCL_PIN);
   i2cScanLog();
   accelLost("not detected at boot");
@@ -910,7 +931,7 @@ void checkSensorWatchdog(uint32_t now) {
     // A sensor holding SDA low needs the same bus recovery as at boot.
     Wire.end();
     i2cBusRecover();
-    Wire.begin(SDA_PIN, SCL_PIN, 400000);
+    Wire.begin(SDA_PIN, SCL_PIN, I2C_CLOCK_HZ);
     if (startAccel() && accelAlerted) {
       accelAlerted = false;
       notify(PRIO_INFO, "white_check_mark", DEVICE_NAME ": accelerometer OK",
@@ -1031,10 +1052,6 @@ void processWindow(float rms, uint32_t now) {
   lastRms = rms;
   if (!accelOk) return;  // no pump detection without the accelerometer
 
-  // Instantaneous vibration indicator (with hysteresis).
-  if (rms > ON_RMS_THRESHOLD) ledOn = true;
-  else if (rms < OFF_RMS_THRESHOLD) ledOn = false;
-
   // Debounced running/stopped state.
   if (rms > ON_RMS_THRESHOLD) {
     if (!aboveSince) aboveSince = now;
@@ -1054,11 +1071,6 @@ void processWindow(float rms, uint32_t now) {
     aboveSince = 0;
     belowSince = 0;
   }
-
-  // LED: blinks while the pump is considered running; otherwise solid while any
-  // vibration is detected, and fully off when quiet.
-  if (deviceRunning) setLed((now / LED_BLINK_HALF_PERIOD_MS) % 2 == 0);
-  else setLed(ledOn);
 }
 
 // If we restarted (crash, watchdog, nightly reboot...) while the pump's last
@@ -1469,7 +1481,7 @@ void checkWiFiWatchdog() {
 void setup(void) {
   Serial.begin(115200);
   Serial.setTxTimeoutMs(0);  // never block on a stalled USB host; excess output is dropped
-  delay(2000);               // give USB-CDC time to attach so early messages aren't lost
+  delay(3000);               // give USB-CDC time to attach so early messages aren't lost
   Serial.println();
 
   // Set the timezone before any logging: the RTC survives a soft reset, so
@@ -1491,8 +1503,7 @@ void setup(void) {
   checkUnexpectedReset();
   checkOtaState();
 
-  pinMode(LED_PIN, OUTPUT);
-  setLed(false);
+  updateStatusLed();
   sonar.begin();
 
   setupWiFi();
@@ -1547,6 +1558,7 @@ void loop(void) {
   // Once per 250 ms window.
   uint32_t now = millis();
   processWindow(rms, now);
+  updateStatusLed();
   serviceLevel(now);
   serviceAht(now);
   checkBootEpoch();

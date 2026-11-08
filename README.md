@@ -165,8 +165,9 @@ report itself (no power, no Wi-Fi, Telegraf down, a hang). It sends a
   directory and restart Grafana. The rule routes to its own contact point, so
   your notification policies are untouched.
 - **Or in the UI:** create a Webhook contact point with the URL
-  `https://ntfy.sh/<topic>?tpl=yes&t={{.title}}&m={{.message}}&p=4&ta=warning`
-  (ntfy's template mode turns Grafana's webhook JSON into a normal push). Then
+  `https://ntfy.sh/<topic>?template=grafana&ta=warning` (ntfy's built-in
+  Grafana template turns the webhook JSON into a normal push; don't put `{{ }}`
+  placeholders in the URL, Grafana tries to evaluate them itself). Then
   create an alert rule on the Flux query in the YAML file, with the condition
   "A is below 1", evaluated every 5 minutes, "Alert state if no data" set to
   **Alerting**, and the contact point selected under notifications.

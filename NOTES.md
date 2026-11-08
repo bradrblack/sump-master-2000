@@ -4,7 +4,8 @@ Handoff notes for the next session: the current state, how things were
 checked, and what's still to do. The design is in [PLAN.md](PLAN.md) and the
 how-to in [README.md](README.md). **Read this file and PLAN.md first.**
 
-Last updated 2026-09-24.
+Last updated 2026-11-07 (see "Session 2026-11-07" below; it supersedes the
+sensor and wiring status in "Current state").
 
 ## Current state
 
@@ -15,16 +16,97 @@ Last updated 2026-09-24.
 - **Telegraf:** `telegraf/sump.conf` is installed and working on
   192.168.3.252:8186, path `/sump` (an empty POST from the Mac returns 204).
 - **Grafana (192.168.3.252:3000):** the dashboard is imported and showing boot
-  records, RSSI and heap. Whether the "Sump monitor silent" alert
-  (`grafana/sump-alerting.yaml`) is installed, and whether it fired, **is
-  unconfirmed**: ask the user.
+  records, RSSI and heap. The "Sump monitor silent" alert is provisioned
+  (InfluxDB data source UID `afal3n4wvrx8ga`, bucket `data`) and **fired** at
+  10:13:30 EDT with the board unplugged (state "Alerting (NoData)"). The
+  contact-point test push arrived via ntfy. The "resolved" push after plugging
+  the board back in is **unconfirmed**.
 - **Repo:** github.com/bradrblack/sump-master-2000, branch `main`, all
   committed and pushed.
 
+## Session 2026-11-07: bench bring-up of the I2C sensors (UNCOMMITTED test build)
+
+**State at the end of the session:** the board is running overnight on the
+bench, with the serial monitor writing `logs/device-monitor-*.log`
+(`pio device monitor --filter log2file`). The accelerometer (ADXL346) and the
+AHT20 both read. The JSN-SR04T level sensor is **not wired to this board yet**
+(`level=--`, "level sensor not responding" push at 2 min is expected).
+NeoPixel status LED on GPIO 8 works: green = all clear, blue = pump running
+(both tested), red = high water (not tested; needs the level sensor).
+
+**Cleaned up and committed as `2026-11-08r4` (DIAG lines, the AHT20 100 ms wait and the 8.5 dBm TX power are gone; I2C stays 100 kHz). The board is still running the r3 test build until it is reflashed. README.md and PLAN.md still describe the old wiring (5 V JSN with an Echo divider, breadboard).** The list below is what was removed: Temporary or
+unproven changes still in it:
+- `src/aht20.cpp` and `src/sm2k.ino`: `// DIAG` logging lines (AHT20 raw
+  bytes, device-ID reads in `beginAccel()`, and heap/I2C probes plus a bus
+  re-init around every ntfy push in `serviceNtfy()`). Remove them; the bus
+  re-init after a push is risky with this I2C driver.
+- `I2C_CLOCK_HZ = 100000` (was 400000). 50000 made the 400 Hz sampling loop
+  run late. **Never tested: 400 kHz with the capacitors fitted.** Try it.
+- `WIFI_TX_POWER = 8.5 dBm` (was 15). Made no difference to the I2C problem;
+  probably revert.
+- `sm2k.ino` `serviceAht()`: a 100 ms wait before reading the AHT20. It wasn't
+  the fix; remove.
+- Kept on purpose: `INPUT_PULLDOWN` on the JSN Echo pin (a floating Echo with
+  an edge interrupt is a bad idea), and the NeoPixel code (`rgbLedWrite`, replaces
+  the old on/off LED and `ledOn`).
+- New in `setupSensor()`: if the accelerometer isn't found at boot, stop the
+  bus, recover it and restart it, up to 3 times, before falling back to the
+  30 s retry.
+
+**Hardware changes that mattered:**
+- The sensors are now wired directly to the board's pins (no breadboard), with
+  **a 470 uF capacitor across 3V3/GND at each sensor**. The caps are the most
+  likely real fix for the intermittent bus failures (the AHT20's first read
+  started working at once). Keep them.
+- The original AHT20+BMP280 board was probably damaged when it was rewired (it
+  ACKed its address but returned no data); a new one worked at once. The
+  BMP280 half (0x77) is unused.
+- The accelerometer's CS and SDO pins are unconnected and it works (the module
+  has pull resistors). Tying CS to 3V3 and SDO to GND is still worth doing if the
+  dropouts come back.
+- JSN-SR04T newer model run from 3.3 V: Echo goes **straight to GPIO 4, no
+  divider**. Re-test the I2C sensors for stability once it's connected (its
+  ping current is on the same 3V3 rail).
+- The "ADXL 362/346" board is an ADXL346 on I2C (0x53, ID 0xE6), not the
+  SPI-only ADXL362.
+
+**What went wrong, and what is and isn't known:**
+- Symptoms: I2C `ESP_ERR_INVALID_STATE` floods, the ID read returning 0x00 or a
+  garbage 0x63, both sensors dying together, and (twice, on cold power-ups) a
+  crash inside the ESP-IDF I2C master RX interrupt (`i2c_isr_receive_handler`).
+- **The cause is not proven.** An early theory ("sending an ntfy push kills the
+  bus") was contradicted by a later log, so don't rely on it. Best guess: the
+  shared 3.3 V rail or the bus lines were marginal (long jumpers, small
+  regulator); the slower clock and the caps helped.
+- A restart of the bus (stop, recover, start) has recovered the sensors every
+  time it was tried. The first read after a bus start often fails or returns
+  0x63; the second works. The retry loops handle that.
+- One unrelated crash seen once: `assert failed: sys_untimeout ... Required to
+  lock TCPIP core` from `NetworkManager::hostByName` inside `sendNtfy` (the
+  first push after boot). Not reproduced; the board rebooted and recovered.
+- The 400 Hz sampling loop spends a minute hammering a dead bus before the
+  3-strike watchdog (30 s checks) declares the accelerometer lost.
+
+**Firmware weaknesses found, not fixed yet:**
+- An accelerometer that answers its ID but isn't measuring (reads a constant,
+  `rms=0.000` while "idle") isn't detected; check POWER_CTL's measure bit.
+- Garbage RMS from a failing sensor created a false "Pump cycle ... unverified"
+  record. A failed `readSample()` should count as a strike straight away.
+- The AHT20 retries only every 60 s after a failed first read.
+- NTP took ~160 s to sync once on one boot (setup waits for it).
+
+**2026-11-08 results:** the overnight run was clean (14 h, 3 AM reboot fine, one I2C error); level sensor wired to 3V3/GPIO3/GPIO4 with no divider and reads correctly; high-water alarm, red LED, ntfy push and "all clear" push all verified; 5 of 5 cold power-ups clean with all three sensors. Not yet tried: 400 kHz. A PCB design brief is in `hw/DESIGN.md`.
+
+**Tomorrow (written 2026-11-07):** (1) the overnight log: look for crashes, the 3 AM daily reboot,
+and dropouts; (2) do 4-5 cold power-ups (unplug 20-30 s) and count crashes and
+"restarting the bus" lines; (3) try 400 kHz with the caps; (4) then clean up
+the test build and commit, and update the README/PLAN.md for the new wiring
+(direct wires, caps, 3.3 V JSN with no divider, NeoPixel).
+
 ## Next steps
 
-1. Confirm the "silent" alert fired while the board was unplugged, and that the
-   "resolved" push arrived after plugging it back in.
+1. Confirm the "resolved" push arrives after plugging the board back in (the
+   "silent" alert itself has fired).
 2. Attach the sensors: GY-346 accelerometer, AHT20, and JSN-SR04T with the Echo
    divider (measure Echo first; see PLAN.md, JSN-SR04T wiring).
 3. Mount the level sensor 30+ cm above the pit rim, measure the sensor-to-floor
@@ -78,6 +160,13 @@ panels show RSSI, heap and boots, and the AHT20 CRC-8 matches the test vector
   heap right).
 - **Two y-axes with one or two points** put both dots in the same spot
   (each axis autoscales around its own value). That's expected, not a data bug.
+- **Grafana templates the webhook URL itself.** The first "silent" alert failed
+  with `can't evaluate field title in type *templates.ExtendedData`: Grafana
+  evaluated ntfy's `{{.title}}` placeholder in the URL. Escaping it
+  (`{{"{{.title}}"}}`) failed the same way. The URL now uses ntfy's built-in
+  `?template=grafana`, with no braces (tested by posting a sample Grafana
+  payload to a throwaway ntfy.sh topic). That template ignores `p=4`, so
+  alert pushes arrive at default priority. Verified from Grafana.
 - **Placeholder secrets for test builds:** `src/secrets.h` and `secrets.ini` are
   now the user's real files. Never overwrite them. Build as-is.
 

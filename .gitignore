@@ -2,3 +2,4 @@
 .h
 src/secrets.h
 secrets.ini
+logs/

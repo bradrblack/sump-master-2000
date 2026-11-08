@@ -6,6 +6,18 @@ to `FIRMWARE_VERSION` in `src/sm2k.ino`.
 Sump Master 2000 is a fork of the vibration-monitor project, taken at
 `2026-09-22r1`. Entries below that point are the original project's history.
 
+## 2026-11-08r4
+
+- NeoPixel status LED on GPIO 8 (replaces the on/off LED): green = all clear,
+  blue = pump running, red = high water.
+- I2C runs at 100 kHz (400 kHz was unreliable on the bench). The accelerometer
+  is looked for up to three times at boot, restarting the bus between tries.
+- The JSN-SR04T Echo pin has a weak pull-down so a disconnected Echo can't fire
+  the interrupt from radio noise. The level sensor runs from 3.3 V with no
+  Echo divider.
+- Hardware note: 470 uF across 3V3/GND at each I2C sensor fixed the intermittent
+  bus failures and boot crashes seen on the bench (5 of 5 cold power-ups clean).
+
 ## 2026-09-24r3
 
 - Quieter logs while sensors are missing: the AHT20 is retried once a minute
