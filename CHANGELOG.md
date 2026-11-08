@@ -6,6 +6,19 @@ to `FIRMWARE_VERSION` in `src/sm2k.ino`.
 Sump Master 2000 is a fork of the vibration-monitor project, taken at
 `2026-09-22r1`. Entries below that point are the original project's history.
 
+## 2026-11-08r5
+
+- Accelerometer: a failed 400 Hz read now counts as "no signal" (never as
+  vibration), and 200 in a row (0.5 s) marks the accelerometer lost, instead of
+  waiting for the 30 s watchdog. Samples are read in one 6-byte burst.
+- Accelerometer watchdog also checks the measure-mode bit, and an exactly
+  constant signal for 10 s marks it lost (it answered its ID but had stopped
+  measuring, so the pump looked idle forever).
+- AHT20: after a failed read it retries every 2 s (five times) before backing
+  off to once a minute, so `air=--` no longer lasts a minute after a cold boot.
+- Level: the first reading after boot must be confirmed by a second burst, so
+  one bad echo (e.g. a loose contact) can't raise the high-water alarm.
+
 ## 2026-11-08r4
 
 - NeoPixel status LED on GPIO 8 (replaces the on/off LED): green = all clear,

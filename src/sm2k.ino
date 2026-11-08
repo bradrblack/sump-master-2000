@@ -18,7 +18,7 @@
 #include "jsn_sr04t.h"
 
 // Bump on each flash you want to identify later -- format: YYYY-MM-DDrN.
-#define FIRMWARE_VERSION "2026-11-08r4"
+#define FIRMWARE_VERSION "2026-11-08r5"
 
 // ---- Configuration (build flags, see platformio.ini) ------------------------
 // DEVICE_NAME appears in every ntfy message and as the InfluxDB "device" tag;
@@ -176,6 +176,10 @@ const uint32_t WIFI_DOWN_REBOOT_MS     = 120000;  // running: reboot if WiFi dow
 // one alert, and retries it (with I2C bus recovery) every ACCEL_RETRY_MS.
 const uint32_t SENSOR_CHECK_INTERVAL_MS = 30000;
 const int      SENSOR_FAIL_LIMIT        = 3;       // consecutive failed checks => treat as missing
+const int      SAMPLE_FAIL_LIMIT        = 200;     // consecutive failed 400 Hz reads (0.5 s) => accelerometer lost
+const int      FLAT_WINDOW_LIMIT        = 40;      // consecutive windows (10 s) with rms exactly 0 => not measuring
+const int      AHT_FAST_RETRIES         = 5;       // quick retries (AHT_FAST_RETRY_MS) before backing off
+const uint32_t AHT_FAST_RETRY_MS        = 2000;
 const uint32_t ACCEL_RETRY_MS           = 30000;
 const uint8_t  ADXL345_DEVICE_ID        = 0xE5;
 const uint8_t  ADXL346_DEVICE_ID        = 0xE6;
@@ -294,6 +298,9 @@ uint32_t lastWifiAttempt = 0;
 uint32_t wifiDownSince = 0;    // 0 = WiFi currently up
 int      lastRebootDay = -1;   // persisted in NVS so the daily reboot fires once, not in a loop
 int      sensorFails = 0;
+int      accelReadFails = 0;   // consecutive failed sample reads
+int      flatWindows = 0;      // consecutive windows with a constant (zero) signal
+int      ahtRetries = 0;       // failed AHT20 attempts since the last good reading
 bool     accelOk = false;      // accelerometer detected and answering
 uint32_t accelOkSinceMs = 0;   // when it (re)started answering
 uint32_t lastAccelRetryMs = 0;
@@ -802,12 +809,26 @@ void updateStatusLed() {
   }
 }
 
-void readSample(float &x, float &y, float &z) {
-  sensors_event_t event;
-  accel.getEvent(&event);
-  x = event.acceleration.x;
-  y = event.acceleration.y;
-  z = event.acceleration.z;
+// Reads X/Y/Z in one burst and reports whether the transfer worked (the
+// Adafruit getEvent() gives no sign of a failed read, just zeros or garbage).
+// Scaled the same way the library does, so the thresholds are unchanged.
+bool readSample(float &x, float &y, float &z) {
+  const uint8_t addr = ADXL345_DEFAULT_ADDRESS;
+  Wire.beginTransmission(addr);
+  Wire.write((uint8_t)ADXL345_REG_DATAX0);
+  if (Wire.endTransmission(false) != 0) return false;
+  if (Wire.requestFrom(addr, (uint8_t)6) != 6) return false;
+  int16_t raw[3];
+  for (int16_t &r : raw) {
+    uint8_t lo = Wire.read();
+    uint8_t hi = Wire.read();
+    r = (int16_t)((hi << 8) | lo);
+  }
+  const float scale = ADXL345_MG2G_MULTIPLIER * SENSORS_GRAVITY_STANDARD;
+  x = raw[0] * scale;
+  y = raw[1] * scale;
+  z = raw[2] * scale;
+  return true;
 }
 
 // A reset can leave a sensor holding SDA low mid-byte, which no amount of
@@ -876,8 +897,10 @@ bool startAccel() {
   if (!beginAccel()) return false;
   accel.setRange(ADXL345_RANGE_16_G);
   accel.setDataRate(ADXL345_DATARATE_400_HZ);
-  readSample(bx, by, bz);
+  if (!readSample(bx, by, bz)) return false;
   accelOk = true;
+  accelReadFails = 0;
+  flatWindows = 0;
   accelOkSinceMs = millis();
   sensorFails = 0;
   logf("[I2C] accelerometer initialized");
@@ -952,10 +975,14 @@ void checkSensorWatchdog(uint32_t now) {
 
   if (now - lastSensorCheck < SENSOR_CHECK_INTERVAL_MS) return;
   lastSensorCheck = now;
-  if (isAccelId(accel.getDeviceID())) {
+  // Answering its ID isn't enough: also check it is still in measure mode
+  // (POWER_CTL bit 3), or it reads a constant and the pump looks idle forever.
+  bool idOk = isAccelId(accel.getDeviceID());
+  if (idOk && (accel.readRegister(ADXL345_REG_POWER_CTL) & 0x08)) {
     sensorFails = 0;
     return;
   }
+  if (idOk) logf("[I2C] accelerometer answers but is not in measure mode");
   sensorFails++;
   logf("[I2C] accelerometer not responding (%d/%d)", sensorFails, SENSOR_FAIL_LIMIT);
   if (sensorFails >= SENSOR_FAIL_LIMIT) accelLost("stopped responding on I2C");
@@ -1194,7 +1221,17 @@ void evaluateBurst(uint32_t now) {
   }
 
   float depth = SENSOR_TO_FLOOR_CM - dist;
-  if (haveLevel && fabsf(depth - levelCm) > LEVEL_MAX_STEP_CM) {
+  // The first reading after boot has nothing to compare with, so it has to be
+  // confirmed by a second burst (a loose contact can otherwise raise the high
+  // water alarm on one bad reading).
+  if (!haveLevel) {
+    if (!candidateValid || fabsf(depth - candidateCm) > LEVEL_CONFIRM_CM) {
+      candidateValid = true;
+      candidateCm = depth;
+      logf("[level] first reading %.1f cm, waiting for confirmation", depth);
+      return;
+    }
+  } else if (fabsf(depth - levelCm) > LEVEL_MAX_STEP_CM) {
     if (!candidateValid || fabsf(depth - candidateCm) > LEVEL_CONFIRM_CM) {
       candidateValid = true;
       candidateCm = depth;
@@ -1262,12 +1299,17 @@ void checkLevelWatchdogs(uint32_t now) {
 // window (it needs 80 ms).
 void serviceAht(uint32_t now) {
   if (!ahtMeasuring) {
-    uint32_t interval = ahtReady ? AHT_INTERVAL_MS : AHT_MISSING_RETRY_MS;
+    uint32_t interval = ahtReady ? AHT_INTERVAL_MS
+                        : ahtRetries < AHT_FAST_RETRIES ? AHT_FAST_RETRY_MS : AHT_MISSING_RETRY_MS;
     if (lastAhtStartMs && now - lastAhtStartMs < interval) return;
     lastAhtStartMs = now;
     if (!ahtReady) ahtReady = aht.begin();
-    if (ahtReady && aht.start()) ahtMeasuring = true;
-    else ahtReady = false;
+    if (ahtReady && aht.start()) {
+      ahtMeasuring = true;
+    } else {
+      ahtReady = false;
+      ahtRetries++;
+    }
     return;
   }
 
@@ -1277,12 +1319,14 @@ void serviceAht(uint32_t now) {
   ahtMeasuring = false;
   if (r != Aht20::OK) {
     ahtReady = false;  // re-initialize before the next attempt
+    ahtRetries++;
     logf("[AHT20] read failed (%s)", r == Aht20::BUSY ? "busy" : "no answer or bad CRC");
     return;
   }
   tempC = t;
   humidity = h;
   ahtAtMs = now;
+  ahtRetries = 0;
   if (ahtAlerted) {
     ahtAlerted = false;
     notify(PRIO_INFO, "white_check_mark", DEVICE_NAME ": temp/humidity sensor OK", "AHT20 readings are back.");
@@ -1551,7 +1595,19 @@ void loop(void) {
   if ((int32_t)(nowUs - nextSampleUs) > 0) nextSampleUs = nowUs + SAMPLE_PERIOD_US; // fell behind
 
   float x = bx, y = by, z = bz;  // no signal while the accelerometer is missing
-  if (accelOk) readSample(x, y, z);
+  if (accelOk) {
+    if (readSample(x, y, z)) {
+      accelReadFails = 0;
+    } else {
+      // A failed read counts as no signal, never as vibration. A sustained run
+      // of them means the sensor or the bus is gone.
+      x = bx; y = by; z = bz;
+      if (++accelReadFails >= SAMPLE_FAIL_LIMIT) {
+        accelReadFails = 0;
+        accelLost("stopped responding on I2C (reads failing)");
+      }
+    }
+  }
 
   float dx = x - bx, dy = y - by, dz = z - bz;
   sumSq += dx * dx + dy * dy + dz * dz;
@@ -1564,6 +1620,17 @@ void loop(void) {
   float rms = sqrt(sumSq / sampleCount);
   sumSq = 0;
   sampleCount = 0;
+
+  // A working accelerometer always has some noise; an exactly constant signal
+  // means it has stopped measuring (e.g. it lost its measure-mode setting).
+  if (accelOk && rms < 0.0005f) {
+    if (++flatWindows >= FLAT_WINDOW_LIMIT) {
+      flatWindows = 0;
+      accelLost("reads a constant (not measuring)");
+    }
+  } else {
+    flatWindows = 0;
+  }
 
   // Once per 250 ms window.
   uint32_t now = millis();

@@ -87,13 +87,12 @@ unproven changes still in it:
 - The 400 Hz sampling loop spends a minute hammering a dead bus before the
   3-strike watchdog (30 s checks) declares the accelerometer lost.
 
-**Firmware weaknesses found, not fixed yet:**
-- An accelerometer that answers its ID but isn't measuring (reads a constant,
-  `rms=0.000` while "idle") isn't detected; check POWER_CTL's measure bit.
-- Garbage RMS from a failing sensor created a false "Pump cycle ... unverified"
-  record. A failed `readSample()` should count as a strike straight away.
-- The AHT20 retries only every 60 s after a failed first read.
-- NTP took ~160 s to sync once on one boot (setup waits for it).
+**Firmware weaknesses found and fixed in `2026-11-08r5` (code written, bench-testing in
+progress; see CHANGELOG):** stuck-at-zero accelerometer (measure bit + constant-signal
+check), failed 400 Hz reads counted as strikes (and as no signal, not vibration, which
+also removes the false "Pump cycle ... unverified" records), AHT20 quick retries after a
+failed read, and the first level reading after boot must be confirmed. The earlier claim
+that NTP once took ~160 s was wrong: the wait is capped at 10 s and real syncs took 0.5-3 s.
 
 **2026-11-08 results:** the overnight run was clean (14 h, 3 AM reboot fine, one I2C error); level sensor wired to 3V3/GPIO3/GPIO4 with no divider and reads correctly; high-water alarm, red LED, ntfy push and "all clear" push all verified; 5 of 5 cold power-ups clean with all three sensors. Not yet tried: 400 kHz. A PCB design brief is in `hw/DESIGN.md`.
 

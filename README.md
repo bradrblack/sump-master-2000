@@ -5,9 +5,8 @@ measures the water level and the air temperature/humidity, sends everything to
 InfluxDB (via Telegraf on the LAN) for a Grafana timeline, and pushes pump
 events, alarms and a daily report to your phone with [ntfy.sh](https://ntfy.sh).
 
-It's a fork of the vibration-monitor project (the ESP32-C3 + ADXL345 appliance
-monitor), made sump specific. There's no cloud service in the data path: Adafruit
-IO is gone. [PLAN.md](PLAN.md) has the design and the remaining open questions.
+There's no cloud service in the data path: readings go to a database on your own
+network. [PLAN.md](PLAN.md) has the design and the remaining open questions.
 
 The sketch is `src/sm2k.ino`, with small drivers for the level sensor
 (`src/jsn_sr04t.*`) and the AHT20 (`src/aht20.*`).
@@ -30,7 +29,7 @@ The sketch is `src/sm2k.ino`, with small drivers for the level sensor
 - **Data to InfluxDB:** pump start/stop as it happens, and every 10 minutes the
   level, temperature, humidity and pump activity. See [Data](#data).
 - **ntfy pushes:** see [Notifications](#notifications).
-- **OTA updates** pushed from the Mac over Wi-Fi, with automatic rollback if the
+- **OTA updates** pushed from your computer over Wi-Fi, with automatic rollback if the
   new firmware isn't healthy. See [Updating](#updating-firmware).
 
 The onboard NeoPixel (GPIO 8, dimmed) shows the state: **green** = all clear,
@@ -74,8 +73,7 @@ connecting it. The firmware enables a weak pull-down on GPIO 4 so a
 disconnected Echo can't fire the interrupt from radio noise.
 [PLAN.md](PLAN.md#jsn-sr04t-wiring) has the details.
 
-**PCB and case:** a carrier PCB and printed case are being designed; see
-[hw/DESIGN.md](hw/DESIGN.md).
+**PCB and case:** the carrier PCB and 3D-printed case are in [hw/](hw/).
 
 **Mounting the level sensor:** the JSN-SR04T is blind closer than about 20-25 cm
 and can then report a double echo (about twice the real distance), which would
@@ -97,17 +95,18 @@ as a real distance.
 2. **Pit settings** in `platformio.ini` (`[env:sump]`): `SENSOR_TO_FLOOR_CM`,
    `HIGH_WATER_CM`, `HIGH_WATER_HYST_CM`, `MIN_DROP_CM`. The values there are
    placeholders until the sensor is mounted; see [Calibration](#calibration).
-3. **Telegraf:** copy `telegraf/sump.conf` to `/etc/telegraf/telegraf.d/` on the
-   InfluxDB host, add the variables from `telegraf/sump.env.example` to
-   Telegraf's environment file (use a write-only token) and restart Telegraf.
-   It listens on port 8186 for the board's POSTs.
+3. **InfluxDB, Telegraf and Grafana:** the board needs somewhere to send its
+   data. If you don't already run these, follow
+   [Setting up InfluxDB, Telegraf and Grafana](#setting-up-influxdb-telegraf-and-grafana)
+   below, then put the Telegraf URL in `TELEGRAF_URL`. (Skip it, and leave
+   `TELEGRAF_URL` out of `secrets.h`, if you only want the ntfy pushes.)
 4. **ntfy:** subscribe to your `NTFY_TOPIC` in the ntfy app.
 5. **First flash over USB** (it installs the OTA partition table):
    `pio run -t upload`.
 
 ## Updating firmware
 
-After the first USB flash, update over Wi-Fi from the Mac:
+After the first USB flash, update over Wi-Fi from your computer:
 
 ```
 pio run -e sump-ota -t upload
@@ -126,6 +125,130 @@ pio run -e sump-ota -t upload
   `update rolled back` with the reason.
 - Bump `FIRMWARE_VERSION` in `src/sm2k.ino` for each release.
 - Recovery if all else fails: USB flash (`pio run -t upload`).
+
+## Setting up InfluxDB, Telegraf and Grafana
+
+Skip this if you already run them. The data path is:
+
+```
+Sump Master  --HTTP POST-->  Telegraf (port 8186)  -->  InfluxDB  <--  Grafana
+ (ESP32-C3)                  receives the board's        stores the     draws the
+                             data and forwards it        time series    dashboard
+```
+
+- **InfluxDB 2.x** is the time-series database that stores the readings.
+- **Telegraf** is a small collector. Here it just accepts the board's POSTs and
+  writes them to InfluxDB (so the board never needs InfluxDB's token).
+- **Grafana** draws the dashboard and sends the "silent" alert.
+
+You need a computer that's always on, on the same network as the board: a
+Raspberry Pi, a NAS, a spare PC or a home server. The easiest way to run all
+three is Docker.
+
+### 1. Start the three services (Docker)
+
+Install [Docker](https://docs.docker.com/get-docker/), make an empty folder, and
+create `docker-compose.yml` in it (change the passwords and token):
+
+```yaml
+services:
+  influxdb:
+    image: influxdb:2
+    restart: unless-stopped
+    ports: ["8086:8086"]
+    volumes: ["influx-data:/var/lib/influxdb2"]
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: change-this-password
+      DOCKER_INFLUXDB_INIT_ORG: home
+      DOCKER_INFLUXDB_INIT_BUCKET: sump
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: change-this-admin-token
+
+  telegraf:
+    image: telegraf
+    restart: unless-stopped
+    ports: ["8186:8186"]
+    depends_on: [influxdb]
+    volumes: ["./sump.conf:/etc/telegraf/telegraf.conf:ro"]
+    environment:
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_ORG: home
+      INFLUX_BUCKET: sump
+      INFLUX_TOKEN: change-this-admin-token   # replace with a write-only token (step 2)
+
+  grafana:
+    image: grafana/grafana-oss
+    restart: unless-stopped
+    ports: ["3000:3000"]
+    depends_on: [influxdb]
+    volumes: ["grafana-data:/var/lib/grafana"]
+
+volumes:
+  influx-data:
+  grafana-data:
+```
+
+Copy this project's `telegraf/sump.conf` into the same folder, then run
+`docker compose up -d`. InfluxDB is now at `http://<server>:8086` (log in as
+`admin`), Grafana at `http://<server>:3000` (first login `admin` / `admin`, it
+asks you to change it).
+
+Not using Docker? Install the three packages for your OS from their websites
+(InfluxDB 2.x, Telegraf, Grafana), create an organisation and a bucket in
+InfluxDB's setup page, copy `telegraf/sump.conf` to
+`/etc/telegraf/telegraf.d/`, and put the variables from
+`telegraf/sump.env.example` in Telegraf's environment file
+(`/etc/default/telegraf` on Linux), then restart Telegraf.
+
+### 2. Make two tokens in InfluxDB
+
+In the InfluxDB web page (port 8086): **Load Data > API Tokens > Generate API
+Token > Custom API Token**.
+
+1. A token with **Write** access to the `sump` bucket only. Put it in Telegraf's
+   `INFLUX_TOKEN` (replacing the admin token in the compose file) and run
+   `docker compose up -d` again.
+2. A token with **Read** access to the `sump` bucket, for Grafana (step 4).
+
+### 3. Check Telegraf is listening
+
+From any computer on the network (replace `<server>`):
+
+```
+curl -i -X POST http://<server>:8186/sump --data-binary 'sump_test,device=curl value=1'
+```
+
+`HTTP/1.1 204 No Content` means it worked. (If you get a connection error,
+check the server's firewall allows port 8186.) Then set the URL in
+`src/secrets.h`:
+
+```
+#define TELEGRAF_URL "http://<server>:8186/sump"
+```
+
+and flash the board. Within a minute you should see a `sump_boot` point: in
+InfluxDB, **Data Explorer > sump bucket > `sump_boot`**, or in Grafana's Explore.
+The 10-minute `sump` readings and pump events follow. If nothing appears, the
+board's serial output says `[tg] ...` for each send and names the error (e.g.
+"connection refused" means the address or port is wrong).
+
+### 4. Add the dashboard to Grafana
+
+1. In Grafana (port 3000): **Connections > Data sources > Add data source >
+   InfluxDB**. Set **Query language** to **Flux**, **URL** to
+   `http://influxdb:8086` (Docker) or `http://<server>:8086`, and under **InfluxDB
+   Details** enter your organisation (`home`), the default bucket (`sump`) and
+   the **read** token. Click **Save & test**.
+2. **Dashboards > New > Import**, upload `grafana/sump-dashboard.json`, pick the
+   data source you just made, and import.
+3. Open the dashboard's settings > Variables and set `bucket` to `sump`, and
+   `high_water_cm` / `min_drop_cm` to the same values as the firmware's
+   `HIGH_WATER_CM` / `MIN_DROP_CM`.
+
+To add the "silent" alert too, see [Grafana](#grafana) below; the data source
+UID it asks for is the last part of the data source's page URL
+(`.../connections/datasources/edit/<uid>`).
 
 ## Data
 
@@ -208,9 +331,7 @@ limits against a heavy wet-season day.
 
 ## Reliability
 
-Borrows the self-healing approach from the
-[RF ceiling fan remote](https://github.com/bradrblack/rf-ceiling-fan-remote)
-firmware: recover on its own where possible, and never fail silently.
+The firmware recovers on its own where possible and never fails silently.
 
 | Mechanism | Behavior |
 |-----------|----------|
@@ -237,9 +358,11 @@ firmware: recover on its own where possible, and never fail silently.
 
 ## Notes and gotchas
 
-- Wi-Fi TX power is capped (`WIFI_TX_POWER`, 15 dBm). At full power this
-  ESP32-C3 mini board joined Wi-Fi on only ~1 in 3 boots. If a board is flaky
-  at 15 dBm, drop to `WIFI_POWER_8_5dBm`.
+- Wi-Fi TX power is set to 15 dBm (`WIFI_TX_POWER`). This was needed on older
+  ESP32-C3 SuperMini boards, which joined Wi-Fi on only about 1 in 3 boots at
+  full power; **the newer "v2" boards with an external antenna don't have that
+  problem and don't need it**. 15 dBm is a safe default; only lower it (e.g.
+  `WIFI_POWER_8_5dBm`) if your board is flaky joining Wi-Fi.
 - Log lines are timestamped (wall-clock time once NTP syncs, uptime before
   that) and the boot banner prints `FIRMWARE_VERSION`.
 - The platform is pinned (`55.03.37`) because the unpinned "stable" release's
