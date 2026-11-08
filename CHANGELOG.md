@@ -9,7 +9,8 @@ Sump Master 2000 is a fork of the vibration-monitor project, taken at
 ## 2026-11-08r4
 
 - NeoPixel status LED on GPIO 8 (replaces the on/off LED): green = all clear,
-  blue = pump running, red = high water.
+  blue = pump running, flashing red = high water with the pump off, flashing
+  purple = high water with the pump running.
 - I2C runs at 100 kHz (400 kHz was unreliable on the bench). The accelerometer
   is looked for up to three times at boot, restarting the bus between tries.
 - The JSN-SR04T Echo pin has a weak pull-down so a disconnected Echo can't fire

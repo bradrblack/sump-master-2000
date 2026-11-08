@@ -89,10 +89,12 @@ const uint32_t I2C_CLOCK_HZ = 100000;  // 400 kHz was unreliable on the bench (5
 const int LEVEL_TRIG_PIN = 3;
 const int LEVEL_ECHO_PIN = 4;
 
-// Onboard NeoPixel (WS2812) status LED: red = high water, blue = pump running,
-// green = all clear. Dimmed because a full-brightness NeoPixel is blinding.
+// Onboard NeoPixel (WS2812) status LED: green = all clear, blue = pump running,
+// flashing red = high water (pump off), flashing purple = high water (pump on).
+// Dimmed because a full-brightness NeoPixel is blinding.
 const int     LED_PIN        = 8;
 const uint8_t LED_BRIGHTNESS = 16;  // 0-255
+const uint32_t LED_FLASH_HALF_PERIOD_MS = 500;
 
 // ---- Vibration detection --------------------------------------------------
 // Samples are high-passed against a slow per-axis baseline (removes gravity and
@@ -779,17 +781,25 @@ void serviceOta() {
 // ==========================================
 // Pump (vibration) sensor
 // ==========================================
-// Red (high water) takes priority over blue (pump running); otherwise green.
+// green = all clear, blue = pump running, flashing red = high water with the
+// pump not running, flashing purple = high water with the pump running.
 // Only writes to the LED when the colour changes.
 void updateStatusLed() {
   static int lastColor = -1;
-  int color = highWater ? 0 : deviceRunning ? 1 : 2;
+  const bool flashOn = (millis() / LED_FLASH_HALF_PERIOD_MS) % 2 == 0;
+  int color;  // 0 off, 1 red, 2 purple, 3 blue, 4 green
+  if (highWater) color = flashOn ? (deviceRunning ? 2 : 1) : 0;
+  else color = deviceRunning ? 3 : 4;
   if (color == lastColor) return;
   lastColor = color;
   const uint8_t b = LED_BRIGHTNESS;
-  if (color == 0) rgbLedWrite(LED_PIN, b, 0, 0);
-  else if (color == 1) rgbLedWrite(LED_PIN, 0, 0, b);
-  else rgbLedWrite(LED_PIN, 0, b, 0);
+  switch (color) {
+    case 1:  rgbLedWrite(LED_PIN, b, 0, 0); break;
+    case 2:  rgbLedWrite(LED_PIN, b, 0, b); break;
+    case 3:  rgbLedWrite(LED_PIN, 0, 0, b); break;
+    case 4:  rgbLedWrite(LED_PIN, 0, b, 0); break;
+    default: rgbLedWrite(LED_PIN, 0, 0, 0); break;
+  }
 }
 
 void readSample(float &x, float &y, float &z) {
