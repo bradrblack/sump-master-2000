@@ -1,3 +1,6 @@
+<img src="./case.png" width="800" />
+<img src="./pcb.png" width="800" />
+
 # Sump Master 2000
 
 An ESP32-C3 sump pump monitor. It detects the pump running from its vibration,
