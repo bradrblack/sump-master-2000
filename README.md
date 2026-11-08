@@ -33,8 +33,9 @@ The sketch is `src/sm2k.ino`, with small drivers for the level sensor
 - **OTA updates** pushed from the Mac over Wi-Fi, with automatic rollback if the
   new firmware isn't healthy. See [Updating](#updating-firmware).
 
-The onboard LED is off when quiet, solid while any vibration is detected (e.g.
-picking the board up), and blinks while the pump is considered running.
+The onboard NeoPixel (GPIO 8, dimmed) shows the state: **green** = all clear,
+**blue** = pump running, **flashing red** = high water with the pump not running,
+**flashing purple** = high water with the pump running.
 
 Serial output (115200) prints a status line once a second:
 `rms=0.012 state=idle level=12.3cm air=17.9C/71% wifi=up tgq=0` (`tgq` is the
@@ -46,22 +47,35 @@ number of points waiting to be sent to Telegraf).
 |------|------------|
 | GY-346 (ADXL346) SDA / SCL | GPIO 5 / GPIO 6 |
 | AHT20 SDA / SCL | GPIO 5 / GPIO 6 (same bus) |
-| JSN-SR04T Trig | GPIO 3 (direct) |
-| JSN-SR04T Echo | GPIO 4 **through a voltage divider** (Echo is 5 V) |
-| JSN-SR04T 5V / GND | SuperMini 5V (USB) / GND |
-| LED | GPIO 8 (onboard, active low) |
+| JSN-SR04T Trig | GPIO 3 |
+| JSN-SR04T Echo | GPIO 4, **straight to the pin** (3.3 V board, no divider) |
+| JSN-SR04T VCC / GND | SuperMini 3V3 / GND |
+| Status LED | GPIO 8 (onboard NeoPixel) |
+| Sensor supply capacitors | 470 µF across 3V3/GND at each I2C sensor |
 
 GPIO 2, 8 and 9 are boot strapping pins on the C3, so nothing else uses them.
+
+**I2C reliability:** the bus runs at **100 kHz**. At 400 kHz, with long jumper
+wires and no capacitors, the sensors dropped out and the board sometimes crashed
+inside the I2C driver on a cold power-up. Short direct wires plus a 470 µF
+capacitor across 3V3/GND at each sensor fixed it (14 hours overnight and 5 of 5
+cold power-ups clean). Keep the capacitors.
 
 **GY-346 note:** the ADXL346 is register-compatible with the ADXL345 and uses
 the same Adafruit library, but reports device ID `0xE6` rather than `0xE5`, which
 the library's `begin()` rejects. The firmware accepts either chip and enables
-measurement itself.
+measurement itself. Its CS and SDO pins can stay unconnected (the module has
+pull resistors). The AHT20+BMP280 board's BMP280 (0x77) is unused.
 
-**Echo divider:** Echo → 1 kΩ → GPIO 4, and GPIO 4 → 2 kΩ → GND (≈3.3 V; 2.2 kΩ /
-3.3 kΩ also works). Some board versions output only 3.3 V on Echo: measure it
-first, and if so wire it straight to GPIO 4. [PLAN.md](PLAN.md#jsn-sr04t-wiring)
-has the diagram and details.
+**Level sensor power:** use a **newer JSN-SR04T / AJ-SR04M board that runs from
+3.3 V**; its Echo is then 3.3 V and needs no divider. An older 5 V board needs
+one: Echo → 1 kΩ → GPIO 4 and GPIO 4 → 2 kΩ → GND. Measure Echo before
+connecting it. The firmware enables a weak pull-down on GPIO 4 so a
+disconnected Echo can't fire the interrupt from radio noise.
+[PLAN.md](PLAN.md#jsn-sr04t-wiring) has the details.
+
+**PCB and case:** a carrier PCB and printed case are being designed; see
+[hw/DESIGN.md](hw/DESIGN.md).
 
 **Mounting the level sensor:** the JSN-SR04T is blind closer than about 20-25 cm
 and can then report a double echo (about twice the real distance), which would

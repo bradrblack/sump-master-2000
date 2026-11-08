@@ -11,8 +11,8 @@ sensor and wiring status in "Current state").
 
 - **Board:** firmware `2026-09-24r3`, flashed over USB, on the main Wi-Fi
   network (it was on the guest network first, which can't reach
-  192.168.3.252). **No sensors attached yet.** Unplugged at the end of the
-  session to test the Grafana "silent" alert.
+  192.168.3.252). All three sensors are now attached on the bench (see
+  "Session 2026-11-07" and the 2026-11-08 results).
 - **Telegraf:** `telegraf/sump.conf` is installed and working on
   192.168.3.252:8186, path `/sump` (an empty POST from the Mac returns 204).
 - **Grafana (192.168.3.252:3000):** the dashboard is imported and showing boot
@@ -34,7 +34,7 @@ AHT20 both read. The JSN-SR04T level sensor is **not wired to this board yet**
 NeoPixel status LED on GPIO 8 works: green = all clear, blue = pump running
 (both tested), red = high water (not tested; needs the level sensor).
 
-**Cleaned up and committed as `2026-11-08r4` (DIAG lines, the AHT20 100 ms wait and the 8.5 dBm TX power are gone; I2C stays 100 kHz). The board is still running the r3 test build until it is reflashed. README.md and PLAN.md still describe the old wiring (5 V JSN with an Echo divider, breadboard).** The list below is what was removed: Temporary or
+**Cleaned up and committed as `2026-11-08r4` (DIAG lines, the AHT20 100 ms wait and the 8.5 dBm TX power are gone; I2C stays 100 kHz). The board is still running the r3 test build until it is reflashed. README.md and PLAN.md were updated on 2026-11-08 for the new wiring.** The list below is what was removed: Temporary or
 unproven changes still in it:
 - `src/aht20.cpp` and `src/sm2k.ino`: `// DIAG` logging lines (AHT20 raw
   bytes, device-ID reads in `beginAccel()`, and heap/I2C probes plus a bus
@@ -107,8 +107,8 @@ the test build and commit, and update the README/PLAN.md for the new wiring
 
 1. Confirm the "resolved" push arrives after plugging the board back in (the
    "silent" alert itself has fired).
-2. Attach the sensors: GY-346 accelerometer, AHT20, and JSN-SR04T with the Echo
-   divider (measure Echo first; see PLAN.md, JSN-SR04T wiring).
+2. Sensors are on the bench (3.3 V JSN, no divider). Remaining: mount them in
+   place and rerun the I2C stability checks on the final wiring/PCB.
 3. Mount the level sensor 30+ cm above the pit rim, measure the sensor-to-floor
    distance, and set `SENSOR_TO_FLOOR_CM` in `platformio.ini` (currently a
    95 cm placeholder).

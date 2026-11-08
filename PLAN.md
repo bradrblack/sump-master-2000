@@ -27,10 +27,18 @@ Last updated 2026-09-24.
     overflows. **Mount the transducer at least 30 cm above the highest level the
     water could physically reach** (the pit rim or floor level), using a short
     standpipe or bracket if needed.
-  - **Trig on GPIO 3, Echo on GPIO 4** (through a voltage divider). Wiring and
-    divider details are in [JSN-SR04T wiring](#jsn-sr04t-wiring) below.
+  - **Trig on GPIO 3, Echo on GPIO 4.** The newer 3.3 V board needs no divider
+    (an older 5 V board does). Details are in
+    [JSN-SR04T wiring](#jsn-sr04t-wiring) below.
 - **Temperature/humidity:** AHT20 on the existing I2C bus, 3.3 V, mounted outside
   the pit.
+- **I2C:** 100 kHz, short wires, and a 470 µF capacitor across 3V3/GND at each
+  sensor (verified on the bench: 400 kHz without the capacitors dropped sensors
+  and crashed on cold power-ups).
+- **Status LED:** the onboard NeoPixel on GPIO 8: green = all clear, blue = pump
+  running, flashing red = high water (pump off), flashing purple = high water
+  (pump on).
+- **PCB and case:** design brief in [hw/DESIGN.md](hw/DESIGN.md).
 - **No float switch for now.** It can be added later on a spare GPIO as an
   independent high-water check.
 
@@ -51,56 +59,37 @@ Last updated 2026-09-24.
 
 ### JSN-SR04T wiring
 
-The sensor runs on 5 V and its Echo output is 5 V, but ESP32-C3 pins take
-3.3 V at most. A two-resistor divider brings Echo down: Echo goes through R1
-to the GPIO, and R2 goes from that GPIO to ground.
+The build uses a **newer JSN-SR04T / AJ-SR04M board that runs from 3.3 V**, so
+its Echo output is 3.3 V and goes **straight to GPIO 4** with no divider:
 
 ```
-  JSN-SR04T                                ESP32-C3 SuperMini
-  ---------                                ------------------
-   5V   ─────────────────────────────────── 5V  (USB 5 V pin)
-   GND  ─────────────────────────────────┬─ GND
-   Trig ─────────────────────────────────┼─ GPIO 3   (direct, no divider)
-                                         │
-   Echo ───[ R1 1 kΩ ]───┬───────────────┼─ GPIO 4
-                         │               │
-                      [ R2 2 kΩ ]        │
-                         │               │
-                         └───────────────┘  (to GND)
+  JSN-SR04T board                          ESP32-C3 SuperMini
+  ---------------                          ------------------
+   VCC  ─────────────────────────────────── 3V3
+   GND  ─────────────────────────────────── GND
+   Trig ─────────────────────────────────── GPIO 3
+   Echo ─────────────────────────────────── GPIO 4  (3.3 V board: direct)
 ```
-
-The GPIO sees 5 V × R2 / (R1 + R2) = 5 × 2 / 3 ≈ 3.3 V.
-
-| R1 (Echo side) | R2 (to GND) | GPIO sees |
-|---|---|---|
-| 1 kΩ | 2 kΩ (or two 1 kΩ in series) | 3.33 V |
-| 2.2 kΩ | 3.3 kΩ | 3.0 V |
-| 10 kΩ | 20 kΩ | 3.33 V |
-
-Any of these works: the ESP32 reads anything above about 2.5 V as HIGH, and
-2.2 kΩ / 3.3 kΩ leaves a little more margin below 3.3 V. Keep the resistors
-between about 1 kΩ and 20 kΩ; much higher and the Echo edges get sloppy.
 
 Notes:
 
-- **Trig needs no divider.** It goes from the ESP32 to the sensor, and 3.3 V is
-  enough to trigger it.
-- **Shared ground** between the sensor and the ESP32 is required, or the divider
-  reads garbage.
-- **Power from the SuperMini's 5V pin** (USB). The sensor isn't reliable on 3.3 V.
-- **Pins:** GPIO 2, 8 and 9 are boot strapping pins on the C3 and GPIO 5/6 are
-  the I2C bus, so they're avoided. GPIO 3/4 also leave GPIO 0-5 free for
+- **Check the board first.** Power it and measure Echo with a meter: it should
+  read 0 V at rest and never more than about 3.4 V. The firmware sets a weak
+  pull-down on GPIO 4 so a floating Echo can't fire the edge interrupt.
+- **Older 5 V boards** run from the SuperMini's 5V pin and output a 5 V Echo, which
+  needs a divider: Echo → R1 1 kΩ → GPIO 4, and GPIO 4 → R2 2 kΩ → GND (about
+  3.3 V; 2.2 kΩ / 3.3 kΩ also works, keep both between about 1 kΩ and 20 kΩ).
+  Put the divider next to the ESP32. Trig needs no divider.
+- **Shared ground** between the sensor and the ESP32 is required.
+- **Power:** the sensor's ping current is on the same 3V3 rail as the I2C
+  sensors. Keep the 470 µF capacitors near them.
+- **Pins:** GPIO 2, 8 and 9 are boot strapping pins on the C3 (8 is also the
+  NeoPixel) and GPIO 5/6 are the I2C bus. GPIO 3/4 leave GPIO 0-5 free for
   deep-sleep wake later.
-- **Placement:** put the divider next to the ESP32, not at the sensor end. The
-  sensor's driver board sits near the ESP32; only the probe's own cable (about
-  2.5 m) runs into the pit.
+- **Placement:** the sensor's driver board sits near the ESP32; only the probe's
+  own cable (about 2.5 m) runs into the pit.
 - **Board mode:** on v3.0 boards, leave the mode resistor pad (R27) empty. That's
   the default Trig/Echo mode the firmware uses.
-- **Check before connecting GPIO 4:** power the sensor and measure the middle of
-  the divider with a meter. It should read 0 V at rest and never more than about
-  3.4 V. Some board versions output only 3.3 V on Echo, which the divider would
-  bring down to about 2.2 V, too close to the HIGH threshold. If Echo measures
-  3.3 V without the divider, wire it straight to GPIO 4 instead.
 
 ## Firmware
 
