@@ -1,7 +1,8 @@
 # Sump Master 2000 PCB and case: design handoff
 
-Status: **concept agreed, nothing laid out yet.** No KiCad schematic/board has been
-generated for this project. This file is the full brief for whoever does it.
+Status (2026-11-08): **rev A generated: schematic, placed and routed board, and case.
+Not yet measured against the real modules, not ordered, not printed.** See section 8 for
+what was built and how it differs from the v3 sketch below. Sections 1-7 are the original brief.
 The current sketch is `layout-sketch-v3.png` (to scale; script in `ref/make_sketch_v3.py`).
 `layout-sketch-v1-/v2-superseded.png` are earlier rejected ideas, kept only for history.
 
@@ -80,3 +81,90 @@ KiCad 10.0.5: `/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli` (ERC, DRC
    needed, vents, latch tabs, USB-C opening).
 4. Update `../README.md` and `../PLAN.md` for the new wiring (they still describe a 5 V JSN with an Echo divider and
    breadboard wiring).
+
+## 8. Rev A as built (2026-11-08)
+
+Files (all generated, re-run the scripts after editing their tables):
+- `tools/gen_carrier.py` -> `sump_carrier.kicad_sch` + `sump_carrier.kicad_pcb` (run with KiCad's Python,
+  command at the top of the script). `sump_carrier.kicad_pro` is the fan project's settings (0.2 mm track,
+  0.5 mm copper-to-edge). New footprint `Custom_Library:CasePin_Hole_2.5mm` (NPTH for the case pins).
+- `case/sump_case.scad` -> `case/tray.stl`, `case/lid.stl` (lid exported flipped, ceiling on the bed).
+- Renders: `carrier-top.png`, `case-preview.png`.
+
+Checks: ERC 0 violations; DRC 0 violations, 0 unconnected, 0 schematic-parity issues.
+Case (overlap volumes, OpenSCAD intersections): lid x tray empty; the only overlaps with the stand-in
+parts are the pins passing through the hole-less dummy boards (six carrier pins, two SR04 locating pins).
+
+**Carrier, 75.5 x 24 mm, 2 layers, GND pour both sides, fully routed:**
+| Ref | Part | Notes |
+|---|---|---|
+| U1 | SuperMini, soldered on 2.54 headers, USB-C overhangs the left edge | GPIO5 SDA, 6 SCL, 3 Trig, 4 Echo, 3V3, GND |
+| J1 | 1x8, GY-346 soldered on its own header (2.5 mm up; bench-test it first on Dupont wires) | pin 1 = VIN at the top edge; labels VIN GND SCL SDA SDO CS IT2 IT1 on silk |
+| J2 | 1x4, AHT20 soldered on its own header (board 2.5 mm up, lying flat toward the far end) | VDD SDA GND SCL from the top edge down (user-verified) |
+| J3 | 4 plain pads (1x4, 2.54 mm) at x 72.8 | VCC TRG ECH GND. Male Dupont wires soldered in; their female ends go on the SR04's own pins. Echo goes straight to GPIO 4 (3.3 V board only, no divider) |
+| C1, C2 | 470 uF upright radial, 7 x 12 mm, D7.5 P2.5 footprint | ADXL and AHT20 caps; side by side between the two sockets |
+| H1-H6 | 2.5 mm holes for case pins | H5/H6 under the ESP at the USB end (standoffs take the USB plug's force; the lid's USB tongue clamps from above); H1/H2 flank the ADXL and get lid hook posts; H3/H4 under the SR04 end, pins only |
+
+No SMD parts, no jumpers, no milled slot: a basic 2-layer order (user's choice, 2026-11-08). The ADXL's
+CS, SDO and INT pins are unconnected (the module's own resistors set I2C mode, as on the bench).
+
+Changes from the v3 sketch, and why:
+- **Board is 75.5 mm, not 100.** It stops before the SR04's tall parts (transformer, big electrolytic), so
+  nothing on the carrier has to fit under them. The case length is about the same (120 mm outside).
+- **No milled slots** (basic PCB order). The AHT20 is about 45 mm from the ESP, with vents beside, above
+  and below it in the case.
+- **Two caps, not four** (user's choice 2026-11-08; the bench only ever had caps at the two I2C modules).
+- **SR04 turned 90 deg under the lid** (user's choice 2026-11-08): its length runs across the case and its
+  header edge faces the carrier, so its straight right-angle pins point back at the carrier. Female Dupont
+  ends plug straight onto them (about 11 mm past the board edge: pins 5 mm out, 12 mm housings) and the wires make a
+  C-bend down to J3. The header edge sits 79.7 mm from the USB wall. Cavity
+  **110 x 43 x 24 mm** (case **114 x 47 x 28 mm** outside, plus 5.7 mm strap rails with a pipe channel underneath). The SR04 is
+  centred across the case, so its JST slot is on the lid's centre line; the socket pokes ~5 mm above the lid.
+- **SR04 held by 4 snap clips** (two on each long edge, 8 mm from the ends, clear of the header), resting
+  on 4 stand-off pads (4 mm) with locating pins (2.2 mm) on two diagonal pads through its corner holes. No
+  screws. Arms are 0.8 mm thick, rooted 1.4 mm up in blind grooves in the lid (top stays closed, no vent
+  holes over them), ~7 mm long with a 0.4 mm hook: ~1% strain, so PLA or PETG. Flex the arms outward to
+  remove it.
+- **Holes without a hook post are press-fit (2.4 mm pins in 2.5 mm holes):** H3/H4 (a hook post there would
+  have to pass through the SR04 board) and H5/H6 (the ESP module is above them). H1 and H2 are clamped by
+  lid hook posts.
+- **Strap tunnels under the tray** (two, 5.5 x 2 mm) so the case can be cable-tied to the discharge pipe;
+  the ADXL needs to feel the pump. Not in the original brief.
+- Lid top: a symmetric 5 mm hole grid centred on the lid (`hole_pattern` in the SCAD): **"rows4" (chosen
+  2026-11-08)** = two rows of 3 mm holes along each long side plus dimples down the middle (fan-case look;
+  holes that would land on an SR04 stand-off pad become dimples); "rows2" = one row each side. The middle strip stays solid for the button tube, the clamping
+  posts and the JST slot. A button guide tunnel sits at the fan case's spot (board x 9.75, 9.5 mm from the
+  lower long edge; check whether that's BOOT or RESET on your module). "SUMP MASTER 2000" is engraved on
+  the lid's long side wall. The tray keeps its side and floor vent slots beside the AHT20.
+- The lid's snap lip is open at the USB end (an earlier version had a cross-wall there that hit the connector).
+
+**Assembly:** solder the 4 Dupont wires into J3; carrier into the tray (the USB-C drops into the rounded
+notch in the end wall, pins through the holes); with the lid upside down, push the SR04 onto the pads
+(back face down, JST up through the slot) until the 4 clips snap over it; plug the wires' female ends onto
+the SR04's pins; press the lid on (the tongue completes the USB opening, snap ridges on the lips).
+
+**Measured by the user (2026-11-08):** caps 7 mm dia x 12 mm tall (footprint now D7.5 P2.5, assumed
+2.5 mm leads); GY-346 20 x 9 mm, orientation confirmed; AHT20 15 x 15 mm, its board 2.5 mm above the
+carrier (soldered on its own header, lying flat away from J2 toward the far end; J3 moved to x 72.8 to clear
+it); SuperMini USB-C bottom flush with the module PCB top (as modelled); RESET 9 mm from the USB end and
+5 mm from the right side with the USB port up (tunnel at board (9.0, 8.0)).
+
+**Silkscreen:** top "SUMP MASTER 2000" and "v1.0"; bottom (mirrored, reads from underneath) the BB logo
+(`tools/bb_logo.png` -> `tools/bb_logo.txt`, 0.05 mm pixels, 11.5 x 7.1 mm), the project URL
+github.com/bradrblack/sump-master-2000 and "SUMP MASTER 2000  PCB v1.0".
+
+**Still needed before ordering / printing:**
+1. AHT20 direction confirmed by the user (lies toward the far end). (Caps: 7 x 12 mm used; the 2.5 mm lead
+   pitch is the standard for that size, a 3.5 mm part would need its leads bent in.)
+2. AJ-SR04M (measured: 42 x 28.5 mm; JST centred, 12 mm from the long edges and 17.5 mm from the short
+   edges, top 9 mm above the board; header centred on a long edge, 10 mm wide, 1 mm in, pins 5 mm past the
+   edge). Holes 2.5 mm, edges 1 mm from the long edges and 1.5 mm from the short ones (centres 2.25 / 2.75 mm in;
+   2.2 mm locating pins). Nothing but the header is near the long edges (clips clear); the tallest part is a 9 mm
+   trimmer pot (the old 16 mm transformer guess is gone).
+3. Dupont housings measured at 12 mm: the plug ends sit ~11 mm past the SR04 edge, ~4 mm short of J3, so the
+   wires make a C-bend down to it.
+4. PLA or PETG both OK: the clips are 0.8 mm arms rooted 1.4 mm up in blind grooves in the lid (top stays
+   closed), on 4 mm stand-off pads, ~7 mm long with a 0.4 mm hook (~1% strain). The case straps to the pump's
+   1-1/2" ABS outlet (48.3 mm OD) with two zip ties (up to 5.5 x 2 mm) through the rail tunnels; the rails
+   have a 16 mm x 2.2 mm channel so the case rests on the pipe along two edges (also fits a 38 mm pipe).
+5. Then print a test tray to check the pin fits (2.2 mm clearance, 2.4 mm press) and the USB opening height.
