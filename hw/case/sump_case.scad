@@ -5,8 +5,10 @@
 // through its holes, hook posts from the lid that clamp it, snap ridges, USB-C
 // held in the end wall. Differences: the AJ-SR04M ultrasonic board is screwed
 // under the lid at the far end with its probe socket through a slot, and the
-// tray has strap tunnels underneath so the case can be cable-tied to the pump's
-// discharge pipe (the accelerometer needs to feel the pump).
+// tray has strap slots low in its side walls so the case can be cable-tied to
+// the pump's discharge pipe (the accelerometer needs to feel the pump). The
+// ties cross the floor under the carrier; the tray's underside is flat, so it
+// prints straight on the bed.
 //
 // Render:
 //   openscad -o tray.stl -D 'part="tray"' sump_case.scad
@@ -144,17 +146,17 @@ lip_t = 1.2; lip_h = 3.5;
 ridge = 0.5;                // ridge on the lip / groove in the tray wall
 snap_x = [20, 60, 102];     // clear of the lip notch at the SR04 header
 
-// ---------------- strap tunnels under the floor ----------------
-strap_x = [26, 52];         // near the ADXL and H2
-strap_w = 5.5; strap_h = 2; rail_l = 9;
-// Pipe saddle: a flat-bottomed channel along the rails, so the case sits on the pump's 1-1/2" ABS
-// outlet (48.3 mm OD) on two lines, 16 mm apart, instead of rocking. A 38 mm pipe also sits on
-// the edges. Flat bottom, so the tray still prints on its rails (the channel is a short bridge).
-pipe_d = 48.3;
-saddle_w = 16;
-saddle_d = 2.2;             // channel depth: clears the pipe's crown by ~0.8 mm (48.3) / ~0.4 mm (38)
-rail_h = 3.5 + saddle_d;
-tunnel_z = -(rail_h - saddle_d) + 0.8;   // tunnel 0.8 mm above the channel floor
+// ---------------- strap slots through the side walls ----------------
+// Each zip tie goes in through one side wall at floor level, across the floor
+// under the carrier (3 mm gap) and out the other side, then round the pipe.
+// The slots sit where the carrier has no solder tails underneath (board x
+// 29.5-43.5 and 58.5-71.5 are clear), so a tie threads with the carrier in.
+// The underside of the tray is flat: no rails, no pipe channel.
+strap_x = [36.5, 65];       // cavity x: under the GY-346, and under the AHT20
+strap_w = 5.5; strap_h = 2; // largest tie
+strap_slot_w = strap_w + 1;
+strap_slot_h = strap_h + 0.6;   // stays under the carrier's underside (standoff_h)
+pipe_d = 48.3;              // 1-1/2" ABS outlet (preview only)
 
 out_l = in_l + 2 * wall; out_w = in_w + 2 * wall;
 
@@ -166,11 +168,7 @@ module at_inner() { translate([wall, wall, floor_t]) children(); }
 // =============== TRAY ===============
 module tray() {
   difference() {
-    union() {
-      rbox(out_l, out_w, floor_t + split_z, corner_r);
-      // strap rails under the floor
-      for (x = strap_x) translate([wall + x - rail_l / 2, 0, -rail_h]) cube([rail_l, out_w, rail_h]);
-    }
+    rbox(out_l, out_w, floor_t + split_z, corner_r);
     at_inner() translate([0, 0, 0]) cube([in_l, in_w, split_z + 1]);
     // USB-C notch, open at the top of the end wall (the lid's tongue closes it)
     usb_port_cutter(wall + 2);
@@ -179,15 +177,11 @@ module tray() {
     for (x = snap_x, side = [0, 1])
       translate([wall + x - 5, side ? wall + in_w - 0.01 : wall - ridge + 0.01, floor_t + split_z - lip_h + 1])
         cube([10, ridge, 1.2]);
-    // AHT20 side vents and floor vents
-    for (x = [aht_x[0] + 1 : vent_pitch : aht_x[1] - 1]) {
+    // AHT20 side vents (no floor vents: the underside is solid)
+    for (x = [aht_x[0] + 1 : vent_pitch : aht_x[1] - 1])
       translate([wall + x, -1, floor_t + 4]) cube([vent_w, out_w + 2, 7]);
-      translate([wall + x, wall + pcb_y0 + 4, -1]) cube([vent_w, pcb_w - 8, floor_t + 2]);
-    }
-    // strap tunnels
-    for (x = strap_x) translate([wall + x - strap_w / 2, -1, tunnel_z]) cube([strap_w, out_w + 2, strap_h]);
-    // pipe saddle channel
-    for (x = strap_x) translate([wall + x - rail_l / 2 - 1, out_w / 2 - saddle_w / 2, -rail_h - 1]) cube([rail_l + 2, saddle_w, saddle_d + 1]);
+    // strap slots through both side walls, at floor level
+    for (x = strap_x) translate([wall + x - strap_slot_w / 2, -1, floor_t]) cube([strap_slot_w, out_w + 2, strap_slot_h]);
   }
   // standoffs + pins
   at_inner() for (h = holes) {
@@ -366,15 +360,19 @@ module dummies() {
   }
 }
 
-// the pump outlet pipe, resting on the saddle edges (preview only)
+// the pump outlet pipe under the flat floor, and the two zip ties (preview only)
 module pipe_dummy() {
-  rr = pipe_d / 2;
-  translate([-20, out_w / 2, -rail_h - sqrt(rr * rr - (saddle_w / 2) * (saddle_w / 2))])
-    rotate([0, 90, 0]) cylinder(d = pipe_d, h = out_l + 40, $fn = 96);
+  translate([-20, out_w / 2, -pipe_d / 2]) rotate([0, 90, 0]) cylinder(d = pipe_d, h = out_l + 40, $fn = 96);
+}
+module tie_dummies() {
+  for (x = strap_x) color("black") {
+    translate([wall + x - strap_w / 2, -0.5, floor_t + 0.2]) cube([strap_w, out_w + 1, 1.3]);
+    for (y = [-1.8, out_w + 0.5]) translate([wall + x - strap_w / 2, y, -pipe_d / 2]) cube([strap_w, 1.3, pipe_d / 2 + floor_t + 1.5]);
+  }
 }
 
 if (part == "none") { }
 else if (part == "tray") tray();
 else if (part == "lid") translate([0, out_w, floor_t + in_h + lid_t]) rotate([180, 0, 0]) lid();
 else if (part == "section") intersection() { union() { tray(); lid(); dummies(); } translate([-5, wall + in_w / 2, -10]) cube([200, 50, 60]); }
-else { tray(); color("white", 0.35) lid(); dummies(); color("lightgray", 0.5) pipe_dummy(); }
+else { tray(); color("white", 0.35) lid(); dummies(); tie_dummies(); color("lightgray", 0.5) pipe_dummy(); }

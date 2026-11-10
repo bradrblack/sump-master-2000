@@ -108,7 +108,7 @@ Generated the carrier schematic and routed board (`hw/tools/gen_carrier.py` ->
 `hw/sump_carrier.kicad_*`) and the case (`hw/case/sump_case.scad` -> tray/lid
 STLs). ERC/DRC clean. **Nothing ordered or printed yet.** Decisions: 2 caps
 (7 x 12 mm, 2.5 mm pitch), 75.5 mm board, no SMD/jumpers/slot, 6 case-pin holes
-incl. two under the ESP, strap tunnels. The SR04 is turned so its own pins
+incl. two under the ESP, strap slots through the tray side walls (flat underside since 2026-11-10; was rails with tunnels). The SR04 is turned so its own pins
 point at the carrier: female Dupont ends on them, male ends soldered into J3;
 it snaps into 4 clips under the lid. GY-346, AHT20, caps, USB height and RESET
 position and the SR04 outline/header/JST are measured; SR04 holes, transformer height and Dupont length are still placeholders.
