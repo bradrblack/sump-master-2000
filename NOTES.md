@@ -129,7 +129,11 @@ Small leftover: `src/sm2k.ino` line ~87 comment still says Echo goes through a
    distance, and set `SENSOR_TO_FLOOR_CM` in `platformio.ini` (currently a
    95 cm placeholder).
 4. Calibrate the vibration thresholds from `rms=` over serial, with the pump
-   idle and running.
+   idle and running. Bench idle noise floor (2026-11-10, board on a desk) is
+   ~0.20 m/s^2 RMS (p99 0.31), so OFF must stay well above 0.20; `2026-11-10r3`
+   uses ON 0.50 / OFF 0.30. **Set them in `platformio.ini`** (its `-D` flags
+   override the sketch defaults). If the real pump reads below ~0.6 in the pit, the
+   noise floor there will decide how low these can go.
 5. From the first real pump cycles (serial `Pump cycle: on at X cm, off at Y cm`,
    or the dashboard's on/off points), set `HIGH_WATER_CM` (placeholder 45) a few
    cm above the normal "on" level and `MIN_DROP_CM` (placeholder 5) well below

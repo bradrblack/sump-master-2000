@@ -18,7 +18,7 @@
 #include "jsn_sr04t.h"
 
 // Bump on each flash you want to identify later -- format: YYYY-MM-DDrN.
-#define FIRMWARE_VERSION "2026-11-08r5"
+#define FIRMWARE_VERSION "2026-11-10r3"
 
 // ---- Configuration (build flags, see platformio.ini) ------------------------
 // DEVICE_NAME appears in every ntfy message and as the InfluxDB "device" tag;
@@ -33,10 +33,10 @@
 // Vibration thresholds (m/s^2 RMS): above ON_RMS_THRESHOLD = vibrating, below
 // OFF_RMS_THRESHOLD = quiet, with the band in between as hysteresis.
 #ifndef ON_RMS_THRESHOLD
-#define ON_RMS_THRESHOLD 0.40f
+#define ON_RMS_THRESHOLD 0.50f
 #endif
 #ifndef OFF_RMS_THRESHOLD
-#define OFF_RMS_THRESHOLD 0.20f
+#define OFF_RMS_THRESHOLD 0.30f
 #endif
 // A run starts after RUN_CONFIRM_MS of continuous vibration and ends after
 // STOP_CONFIRM_MS of continuous quiet.
@@ -224,6 +224,8 @@ uint32_t belowSince = 0;       // 0 = not currently below OFF threshold
 uint32_t runStartMs = 0;
 uint32_t lastStatusMs = 0;
 float lastRms = 0;
+float maxRmsSinceStatus = 0;   // loudest window since the last status line
+int   loudWindowsSinceStatus = 0; // windows >= OFF_RMS_THRESHOLD since the last status line
 int lastRecordedState = -1;    // last pump event recorded: 1 start, 0 stop, -1 unknown; persisted in NVS
 
 // Pump statistics since boot (the daily reboot makes this roughly a day) and
@@ -1087,6 +1089,8 @@ void setRunState(bool running, uint32_t eventMs) {
 // Called once per window with that window's RMS.
 void processWindow(float rms, uint32_t now) {
   lastRms = rms;
+  if (rms > maxRmsSinceStatus) maxRmsSinceStatus = rms;
+  if (rms >= OFF_RMS_THRESHOLD) loudWindowsSinceStatus++;
   if (!accelOk) return;  // no pump detection without the accelerometer
 
   // Debounced running/stopped state.
@@ -1659,8 +1663,10 @@ void loop(void) {
     else snprintf(level, sizeof(level), "--");
     if (ahtFresh(now)) snprintf(air, sizeof(air), "%.1fC/%.0f%%", tempC, humidity);
     else snprintf(air, sizeof(air), "--");
-    logf("rms=%.3f state=%s level=%s air=%s wifi=%s tgq=%d", lastRms,
-         !accelOk ? "no-accel" : deviceRunning ? "RUNNING" : "idle", level, air,
+    logf("rms=%.3f max=%.3f loud=%d state=%s level=%s air=%s wifi=%s tgq=%d", lastRms,
+         maxRmsSinceStatus, loudWindowsSinceStatus, !accelOk ? "no-accel" : deviceRunning ? "RUNNING" : "idle", level, air,
          WiFi.status() == WL_CONNECTED ? "up" : "down", tgCount);
+    maxRmsSinceStatus = 0;
+    loudWindowsSinceStatus = 0;
   }
 }

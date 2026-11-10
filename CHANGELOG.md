@@ -6,6 +6,19 @@ to `FIRMWARE_VERSION` in `src/sm2k.ino`.
 Sump Master 2000 is a fork of the vibration-monitor project, taken at
 `2026-09-22r1`. Entries below that point are the original project's history.
 
+## 2026-11-10r3
+
+- Vibration thresholds raised to ON 0.50 / OFF 0.30 m/s^2 RMS (were 0.40 /
+  0.20), in `platformio.ini` (its `-D` flags override the sketch defaults; r1
+  changed only the sketch, so it had no effect). The ADXL346's idle noise floor
+  on the bench is ~0.21 (louder windows up to ~0.37 with typing on the same
+  desk), right on the old OFF threshold, so after a bump started a "run" it
+  never saw 3 s of continuous quiet and stayed RUNNING indefinitely.
+  Provisional until calibrated against the real pump.
+- Status line adds `max=` (loudest 250 ms window in that second) and `loud=`
+  (windows at or above OFF_RMS_THRESHOLD), since `rms=` shows only one window
+  in four.
+
 ## 2026-11-08r5
 
 - Accelerometer: a failed 400 Hz read now counts as "no signal" (never as
