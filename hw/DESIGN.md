@@ -103,7 +103,7 @@ parts are the pins passing through the hole-less dummy boards (six carrier pins,
 | J2 | 1x4, AHT20 soldered on its own header (board 2.5 mm up, lying flat toward the far end) | VDD SDA GND SCL from the top edge down (user-verified) |
 | J3 | 4 plain pads (1x4, 2.54 mm) at x 72.8 | VCC TRG ECH GND. Male Dupont wires soldered in; their female ends go on the SR04's own pins. Echo goes straight to GPIO 4 (3.3 V board only, no divider) |
 | C1, C2 | 470 uF upright radial, 7 x 12 mm, D7.5 P2.5 footprint | ADXL and AHT20 caps; side by side between the two sockets |
-| H1-H6 | 2.5 mm holes for case pins | H5/H6 under the ESP at the USB end (standoffs take the USB plug's force; the lid's USB tongue clamps from above); H1/H2 flank the ADXL and get lid hook posts; H3/H4 under the SR04 end, pins only |
+| H1-H6 | 2.5 mm holes for case pins | H5/H6 under the ESP at the USB end (standoffs take the USB plug's force; the lid's end wall closes over the USB connector from above); H1/H2 flank the ADXL and get lid hook posts; H3/H4 under the SR04 end, pins only |
 
 No SMD parts, no jumpers, no milled slot: a basic 2-layer order (user's choice, 2026-11-08). The ADXL's
 CS, SDO and INT pins are unconnected (the module's own resistors set I2C mode, as on the bench).
@@ -118,7 +118,7 @@ Changes from the v3 sketch, and why:
   header edge faces the carrier, so its straight right-angle pins point back at the carrier. Female Dupont
   ends plug straight onto them (about 11 mm past the board edge: pins 5 mm out, 12 mm housings) and the wires make a
   C-bend down to J3. The header edge sits 79.7 mm from the USB wall. Cavity
-  **110 x 43 x 24 mm** (case **114 x 47 x 28 mm** outside, flat underneath). The SR04 is
+  **110 x 47.4 x 24 mm** (case **114 x 51.4 x 28 mm** outside, flat underneath). The SR04 is
   centred across the case, so its JST slot is on the lid's centre line; the socket pokes ~5 mm above the lid.
 - **SR04 held by 4 snap clips** (two on each long edge, 8 mm from the ends, clear of the header), resting
   on 4 stand-off pads (4 mm) with locating pins (2.2 mm) on two diagonal pads through its corner holes. No
@@ -140,13 +140,37 @@ Changes from the v3 sketch, and why:
   holes that would land on an SR04 stand-off pad become dimples); "rows2" = one row each side. The middle strip stays solid for the button tube, the clamping
   posts and the JST slot. A button guide tunnel sits at the fan case's spot (board x 9.75, 9.5 mm from the
   lower long edge; check whether that's BOOT or RESET on your module). "SUMP MASTER 2000" is engraved on
-  the lid's long side wall. The tray keeps its side vent slots beside the AHT20 (its floor is solid).
-- The lid's snap lip is open at the USB end (an earlier version had a cross-wall there that hit the connector).
+  the tray's long side wall. The tray keeps its side vent slots beside the AHT20 (its floor is solid).
+- **Closure: lid skirts inside full-height tray walls** (the fan dongle case's arrangement; printed and
+  confirmed by the user 2026-11-11).
+  - The tray's walls run the full height (24 mm inside). Its USB end is only a low stub wall, up to the
+    centre line of the USB-C opening.
+  - The lid is a flat ceiling with two 2 mm skirts that slide down inside the long walls (0.2 mm gap,
+    15 mm tall), and an end wall across the full width that drops onto the stub wall and carries the top
+    half of the USB-C opening.
+  - Three snap tabs per skirt (cavity x 18, 48, 98): the skirt is thinned to 1 mm over 10 mm, with a slit
+    either side and a window that clicks over a 0.7 mm ridge on the tray wall (0.5 mm engagement, under 1%
+    strain). The ridge's underside is 45 deg, so a firm pull opens the case. Unlike the fan case's
+    friction-only tabs, these have a real catch.
+  - The SR04 (42 mm across) needs the skirts beside it, so the cavity is 47.4 mm wide; everything inside
+    is centred. The AHT20 side vents carry on through the skirts.
+  - If the snap is too tight or loose, change `ridge_p` (ridge height) or `skirt_gap`.
+  - **Removed 2026-11-11: the original "lip" closure** (tray and lid walls meeting half way up, a 1.2 mm
+    lip under the lid's walls snapping into grooves; case 47 mm wide). Its lip was modelled 0.2 mm beside
+    the lid wall with no overlap, so it was a separate body and did not print. It is in git history
+    before this date if ever wanted.
+- **H1 clamp post made solid (2026-11-10).** Its hollow tip had a 0.3 mm wall (3.4 mm post,
+  2.8 mm bore), which doesn't print with a 0.4 mm nozzle, so the first printed lid's post came out about
+  2.5 mm short and didn't clamp the board beside the ADXL. The post is now solid and the tray pin at H1
+  stops 0.3 mm below the carrier's top face (it still locates the board); the post presses on the board
+  around the hole. H2's post (4.5 mm, 0.85 mm wall) keeps its hollow tip. Both tray and lid changed.
+- **One-solid check (2026-11-10):** posts and snap ridges overlap the part they sit on, so `tray.stl` and
+  `lid.stl` are one body each (count the connected bodies after any change), and lid x tray only touch.
 
 **Assembly:** solder the 4 Dupont wires into J3; carrier into the tray (the USB-C drops into the rounded
 notch in the end wall, pins through the holes); with the lid upside down, push the SR04 onto the pads
 (back face down, JST up through the slot) until the 4 clips snap over it; plug the wires' female ends onto
-the SR04's pins; press the lid on (the tongue completes the USB opening, snap ridges on the lips).
+the SR04's pins; press the lid on (its skirts slide inside the tray's long walls until the tabs click; its end wall completes the USB opening).
 
 **Measured by the user (2026-11-08):** caps 7 mm dia x 12 mm tall (footprint now D7.5 P2.5, assumed
 2.5 mm leads); GY-346 20 x 9 mm, orientation confirmed; AHT20 15 x 15 mm, its board 2.5 mm above the

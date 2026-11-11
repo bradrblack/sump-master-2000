@@ -10,6 +10,13 @@
 // ties cross the floor under the carrier; the tray's underside is flat, so it
 // prints straight on the bed.
 //
+// Closure (as on the fan dongle case): the tray's walls run the full height and
+// the lid is a flat ceiling with two 2 mm skirts that slide down inside the long
+// walls, plus an end wall that drops onto the tray's low stub wall at the USB
+// end. Snap tabs in the skirts click over ridges on the tray walls. (An earlier
+// "lip" closure, with a thin lip under half-height lid walls, was removed
+// 2026-11-11: the lip was not attached to the lid and did not print.)
+//
 // Render:
 //   openscad -o tray.stl -D 'part="tray"' sump_case.scad
 //   openscad -o lid.stl  -D 'part="lid"'  sump_case.scad   (printed upside down, ceiling on the bed)
@@ -22,14 +29,27 @@
 part = "both";
 $fn = 40;
 
+// ---------------- lid skirts and snaps ----------------
+skirt_t    = 2;      // skirt thickness
+skirt_gap  = 0.2;    // skirt to the tray wall
+skirt_z0   = 9;      // skirt's lower edge above the floor (tabs are 15 mm long)
+tab_w      = 10;     // snap tab width
+tab_t      = 1;      // tab thickness (the skirt is thinned from the inside)
+tab_slit   = 1;      // slit either side of a tab, so it flexes on its own
+ridge_p    = 0.7;    // ridge height off the tray wall (0.5 mm into the tab's window)
+ridge_w    = 5.6;
+ridge_z0   = 14;     // ridge's lower edge above the floor
+ridge_h    = ridge_p + 0.6 + 2.4;   // 45 deg underside, short flat, long ramp on top
+win_w      = ridge_w + 0.8;         // window in the tab that the ridge clicks into
+skirt_snap_x = [18, 48, 98];        // clear of the AHT20 vents (56-71)
+
 // ---------------- case shell ----------------
 wall      = 2;
 floor_t   = 2;
 lid_t     = 2;
 in_l      = 110;     // cavity length: far clip + 0.6 mm to the end wall
-in_w      = 43;      // cavity width: the SR04's 42 mm length runs across the case
+in_w      = 43 + 2 * (skirt_t + skirt_gap);   // cavity width: the SR04's 42 mm length runs across the case; the skirts need their own room
 in_h      = 24;      // cavity height, floor top to lid underside
-split_z   = 13;      // tray walls end here; the lid's walls come down to meet them
 corner_r  = 2;
 fit       = 0.2;     // general FDM clearance
 
@@ -54,6 +74,13 @@ pin_d   = 2.2;          // through the 2.5 mm holes
 pin_d_snug = 2.4;       // holes without a hook post (H3-H6) are press-fit
 boss_d  = 5;
 hook_gap = 0.3;          // hook post stops this far above the carrier
+// A hook post normally has a hollow tip that fits over the tray pin. Where the post
+// is too thin for that (H1: 3.4 mm post, 2.8 mm bore = a 0.3 mm wall that doesn't
+// print), the post is solid instead and the tray pin stops just below the carrier's
+// top face, so the post presses on the board around the hole.
+hook_bore_d = pin_d + 0.6;
+min_tip_wall = 0.8;
+function solid_post(h) = h[2] > 0 && (h[2] - hook_bore_d) / 2 < min_tip_wall;
 
 // ---------------- ESP32-C3 SuperMini USB-C ----------------
 esp_top   = pcb_top + 3.74;  // module PCB top (2.54 header spacer + 1.2 PCB), from the fan case
@@ -141,11 +168,6 @@ gy_w = 9; gy_l = 20;                       // GY-346 (user-measured), lying flat
 gy_z = 2.5;                                // soldered on its own header like the AHT20 (user, after bench testing)
 vent_w = 1.6; vent_pitch = 3.2;
 
-// ---------------- snap lips ----------------
-lip_t = 1.2; lip_h = 3.5;
-ridge = 0.5;                // ridge on the lip / groove in the tray wall
-snap_x = [20, 60, 102];     // clear of the lip notch at the SR04 header
-
 // ---------------- strap slots through the side walls ----------------
 // Each zip tie goes in through one side wall at floor level, across the floor
 // under the carrier (3 mm gap) and out the other side, then round the pipe.
@@ -159,6 +181,7 @@ strap_slot_h = strap_h + 0.6;   // stays under the carrier's underside (standoff
 pipe_d = 48.3;              // 1-1/2" ABS outlet (preview only)
 
 out_l = in_l + 2 * wall; out_w = in_w + 2 * wall;
+tray_h = in_h;       // tray walls run the full height
 
 module rbox(l, w, h, r) {
   translate([r, r, 0]) linear_extrude(h) offset(r) square([l - 2 * r, w - 2 * r]);
@@ -168,64 +191,90 @@ module at_inner() { translate([wall, wall, floor_t]) children(); }
 // =============== TRAY ===============
 module tray() {
   difference() {
-    rbox(out_l, out_w, floor_t + split_z, corner_r);
-    at_inner() translate([0, 0, 0]) cube([in_l, in_w, split_z + 1]);
-    // USB-C notch, open at the top of the end wall (the lid's tongue closes it)
+    rbox(out_l, out_w, floor_t + tray_h, corner_r);
+    at_inner() translate([0, 0, 0]) cube([in_l, in_w, tray_h + 1]);
     usb_port_cutter(wall + 2);
-    translate([-1, wall + usb_y - usb_port_w / 2, floor_t + usb_zc]) cube([wall + 2, usb_port_w, 50]);
-    // grooves for the lid's snap ridges
-    for (x = snap_x, side = [0, 1])
-      translate([wall + x - 5, side ? wall + in_w - 0.01 : wall - ridge + 0.01, floor_t + split_z - lip_h + 1])
-        cube([10, ridge, 1.2]);
+    // the USB end is a low stub wall up to the port's centre line; the lid's
+    // end wall drops onto it, across the full width
+    translate([-1, -1, floor_t + usb_zc]) cube([wall + fit + 1, out_w + 2, 50]);
+    // label on the long side wall (the y = 0 side), above the vents
+    translate([out_l / 2, 0.5, floor_t + 17.5])
+      rotate([90, 0, 0]) linear_extrude(1)
+        text("SUMP MASTER 2000", size = 5, halign = "center", valign = "center");
     // AHT20 side vents (no floor vents: the underside is solid)
     for (x = [aht_x[0] + 1 : vent_pitch : aht_x[1] - 1])
       translate([wall + x, -1, floor_t + 4]) cube([vent_w, out_w + 2, 7]);
     // strap slots through both side walls, at floor level
     for (x = strap_x) translate([wall + x - strap_slot_w / 2, -1, floor_t]) cube([strap_slot_w, out_w + 2, strap_slot_h]);
   }
+  // ridges on the long walls that the lid's tabs click over
+  at_inner() for (x = skirt_snap_x, side = [0, 1]) snap_ridge(x, side);
   // standoffs + pins
   at_inner() for (h = holes) {
     p = bxy(h);
     translate([p[0], p[1], 0]) {
       cylinder(d = boss_d, h = standoff_h);
-      cylinder(d = h[2] > 0 ? pin_d : pin_d_snug, h = pcb_top + 1.2);
-      translate([0, 0, pcb_top + 1.2]) cylinder(d1 = h[2] > 0 ? pin_d : pin_d_snug, d2 = 1.4, h = 0.6);
+      pin_top = solid_post(h) ? pcb_top - 0.9 : pcb_top + 1.2;   // short pin under a solid post
+      cylinder(d = h[2] > 0 ? pin_d : pin_d_snug, h = pin_top);
+      translate([0, 0, pin_top]) cylinder(d1 = h[2] > 0 ? pin_d : pin_d_snug, d2 = 1.4, h = 0.6);
     }
+  }
+}
+
+// A snap ridge on a long wall's inner face, in cavity coordinates. The lid's tab
+// rides down the long ramp on top; the 45 deg underside holds it but lets a firm
+// pull open the case (and prints without support).
+module snap_ridge(x, side) {
+  pts = [[-0.1, ridge_z0], [0, ridge_z0], [ridge_p, ridge_z0 + ridge_p], [ridge_p, ridge_z0 + ridge_p + 0.6], [0, ridge_z0 + ridge_h], [-0.1, ridge_z0 + ridge_h]];   // 0.1 into the wall: one solid
+  translate([x - ridge_w / 2, 0, 0]) rotate([90, 0, 90]) linear_extrude(ridge_w)
+    polygon([for (q = pts) [side ? in_w - q[0] : q[0], q[1]]]);
+}
+
+// One lid skirt, in cavity coordinates: a 2 mm wall hanging from the
+// ceiling just inside a long tray wall. At each snap position it is thinned to a
+// 1 mm tab with a slit either side and a window for the tray's ridge.
+module skirt(side) {
+  y0 = side ? in_w - skirt_gap - skirt_t : skirt_gap;
+  difference() {
+    translate([1, y0, skirt_z0]) cube([in_l - 1.4, skirt_t, in_h - skirt_z0 + 0.01]);
+    for (x = skirt_snap_x) {
+      // thin the tab from the inside
+      translate([x - tab_w / 2, side ? y0 - 1 : y0 + tab_t, skirt_z0 - 1]) cube([tab_w, skirt_t - tab_t + 1, in_h - skirt_z0 + 1]);
+      // slits
+      for (sx = [-tab_w / 2 - tab_slit, tab_w / 2])
+        translate([x + sx, y0 - 1, skirt_z0 - 1]) cube([tab_slit, skirt_t + 2, in_h - skirt_z0 + 1]);
+      // window
+      translate([x - win_w / 2, y0 - 1, ridge_z0 - 0.3]) cube([win_w, skirt_t + 2, ridge_h + 0.6]);
+    }
+  }
+}
+
+// The lid's shell: flat ceiling, the two skirts, and an end
+// wall at the USB end that sits on the tray's stub wall and carries the top half
+// of the USB-C opening.
+module lid_shell_skirt() {
+  translate([0, 0, floor_t + in_h]) rbox(out_l, out_w, lid_t, corner_r);
+  at_inner() for (side = [0, 1]) skirt(side);
+  difference() {
+    intersection() {
+      rbox(out_l, out_w, floor_t + in_h + 0.01, corner_r);
+      translate([-1, -1, floor_t + usb_zc + 0.1]) cube([wall + 1, out_w + 2, 100]);
+    }
+    usb_port_cutter(wall + 2);
   }
 }
 
 // =============== LID (modelled in place; flip to print) ===============
 module lid() {
-  lid_wall_h = in_h - split_z;
   difference() {
     union() {
-      // ceiling + outer walls down to the split line
-      translate([0, 0, floor_t + split_z]) difference() {
-        rbox(out_l, out_w, lid_wall_h + lid_t, corner_r);
-        translate([wall, wall, -1]) cube([in_l, in_w, lid_wall_h + 1]);
-      }
-      // lips that drop inside the tray walls (not on the USB end, where the connector is)
-      at_inner() translate([0, 0, split_z - lip_h]) difference() {
-        translate([lip_t + fit + 2, fit, 0]) cube([in_l - 2 * fit - lip_t - 2, in_w - 2 * fit, lip_h]);
-        // open at the USB end (the cut runs past the lip's near end)
-        translate([-1, fit + lip_t, -1]) cube([in_l - lip_t - fit + 1, in_w - 2 * fit - 2 * lip_t, lip_h + 2]);
-      }
-      // snap ridges on the lips
-      at_inner() for (x = snap_x, side = [0, 1])
-        translate([x - 4.5, side ? in_w - fit : fit - ridge, split_z - lip_h + 1.1])
-          cube([9, ridge, 1]);
-      // tongue that closes the USB notch above the connector
-      difference() {
-        translate([0, wall + usb_y - (usb_port_w - fit) / 2, floor_t + usb_zc])
-          cube([wall, usb_port_w - fit, split_z - usb_zc + 0.01]);
-        usb_port_cutter(wall + 2);
-      }
+      lid_shell_skirt();
       // hook posts that clamp the carrier
       at_inner() for (h = holes) if (h[2] > 0) {
         p = bxy(h);
         translate([p[0], p[1], pcb_top + hook_gap]) difference() {
-          cylinder(d = h[2], h = in_h - pcb_top - hook_gap);
-          translate([0, 0, -1]) cylinder(d = pin_d + 0.6, h = 3.5);   // 1 mm clear above the pin tip
+          cylinder(d = h[2], h = in_h - pcb_top - hook_gap + 0.01);   // 0.01 into the ceiling: one solid
+          if (!solid_post(h)) translate([0, 0, -1]) cylinder(d = hook_bore_d, h = 3.5);   // 1 mm clear above the pin tip
         }
       }
       // button guide tube, hanging from the ceiling to just above the ESP's button
@@ -255,10 +304,9 @@ module lid() {
     at_inner() for (cu = sr_clip_u, side = [0, 1]) sr_clip_relief(cu, side);
     // dimples and vent holes in the top
     lid_texture();
-    // label, engraved on the lid's long side wall (the y = 0 side)
-    translate([out_l / 2, 0.5, floor_t + split_z + (in_h - split_z + lid_t) / 2])
-      rotate([90, 0, 0]) linear_extrude(1)
-        text("SUMP MASTER 2000", size = 5, halign = "center", valign = "center");
+    // the tray's AHT20 side vents carry on through the skirts
+    for (x = [aht_x[0] + 1 : vent_pitch : aht_x[1] - 1])
+      translate([wall + x, -1, floor_t + 4]) cube([vent_w, out_w + 2, 7]);
   }
 }
 
@@ -374,5 +422,6 @@ module tie_dummies() {
 if (part == "none") { }
 else if (part == "tray") tray();
 else if (part == "lid") translate([0, out_w, floor_t + in_h + lid_t]) rotate([180, 0, 0]) lid();
+else if (part == "clash") intersection() { tray(); lid(); }   // must be empty
 else if (part == "section") intersection() { union() { tray(); lid(); dummies(); } translate([-5, wall + in_w / 2, -10]) cube([200, 50, 60]); }
 else { tray(); color("white", 0.35) lid(); dummies(); tie_dummies(); color("lightgray", 0.5) pipe_dummy(); }

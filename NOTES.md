@@ -108,11 +108,11 @@ Generated the carrier schematic and routed board (`hw/tools/gen_carrier.py` ->
 `hw/sump_carrier.kicad_*`) and the case (`hw/case/sump_case.scad` -> tray/lid
 STLs). ERC/DRC clean. **Nothing ordered or printed yet.** Decisions: 2 caps
 (7 x 12 mm, 2.5 mm pitch), 75.5 mm board, no SMD/jumpers/slot, 6 case-pin holes
-incl. two under the ESP, strap slots through the tray side walls (flat underside since 2026-11-10; was rails with tunnels). The SR04 is turned so its own pins
+incl. two under the ESP, strap slots through the tray side walls (flat underside since 2026-11-10; was rails with tunnels). The lid closes fan-case style (full-height tray walls, lid skirts with snap tabs inside them); the original thin-lip closure was removed 2026-11-11 because its lip was not attached to the lid. The first skirt print fit (2026-11-11); the solid H1 post / short pin revision after it is not printed yet. The SR04 is turned so its own pins
 point at the carrier: female Dupont ends on them, male ends soldered into J3;
 it snaps into 4 clips under the lid. GY-346, AHT20, caps, USB height and RESET
 position and the SR04 outline/header/JST are measured; SR04 holes, transformer height and Dupont length are still placeholders.
-Checklist and decisions: `hw/DESIGN.md` section 8. Case is 114 x 47 x 28 mm. Browser viewer: claude.ai
+Checklist and decisions: `hw/DESIGN.md` section 8. Case is 114 x 51.4 x 28 mm. Browser viewer: claude.ai
 artifacts 4VSqGyKoZyfA9BqPo54RWs (case) and JjcE6u5YUD6zGgqs6JdeMw (PCB, KiCad GLB export) (built from scratchpad files, not in the repo).
 Workflow: edit the tables in the script/SCAD and re-run; once you start
 hand-editing in KiCad, stop re-running the generator (it overwrites).
