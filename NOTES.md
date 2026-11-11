@@ -4,6 +4,16 @@ Handoff notes for the next session: the current state, how things were
 checked, and what's still to do. The design is in [PLAN.md](PLAN.md) and the
 how-to in [README.md](README.md). **Read this file and PLAN.md first.**
 
+**2026-11-11:** firmware `2026-11-11r2` is on the board (flashed OTA). It adds the web
+page (`http://sm2k.local/`, or the IP; `curl` on the Mac resolves `sm2k.local` slowly, use
+the IP), settings saved in NVS and changeable from the page, and vibration fields in the
+`sump` point. Tested from the Mac: page, `/api/status`, `/api/log`, save (digest auth),
+reject bad values, wrong password, reset to defaults. **Not tested yet:** the page in a
+phone browser, a real pump run (last-run readings and the suggested thresholds), and the
+new Grafana panel (the dashboard JSON was regenerated but **not re-imported** into
+Grafana). The bench level sensor read 54 cm deep that morning, over the 45 cm default,
+so the board was in HIGH WATER on the bench.
+
 Last updated 2026-11-08 (see "Session 2026-11-07" below; it supersedes the
 sensor and wiring status in "Current state").
 

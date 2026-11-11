@@ -56,6 +56,19 @@
           "uid": "${DS_INFLUX}"
         },
         "enable": true,
+        "iconColor": "orange",
+        "name": "Settings changed",
+        "target": {
+          "refId": "Anno",
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"sump_config\" and r._field == \"rms_on\" and r.device == \"${device}\")\n  |> group()\n  |> map(fn: (r) => ({_time: r._time, text: \"Settings changed on the board\"}))"
+        }
+      },
+      {
+        "datasource": {
+          "type": "influxdb",
+          "uid": "${DS_INFLUX}"
+        },
+        "enable": true,
         "iconColor": "blue",
         "name": "Reboots",
         "target": {
@@ -1417,6 +1430,257 @@
         }
       },
       "description": "A steady fall in free heap between nightly reboots would point to a leak."
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "Vibration: idle and running, against the thresholds",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUX}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 58,
+        "w": 24,
+        "h": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUX}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"sump\" and r._field == \"rms_idle_avg\" and r.device == \"${device}\")\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> rename(columns: {_value: \"Idle average\"})"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUX}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"sump\" and r._field == \"rms_idle_max\" and r.device == \"${device}\")\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> rename(columns: {_value: \"Idle peak\"})"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUX}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"sump\" and r._field == \"rms_run_avg\" and r.device == \"${device}\")\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> rename(columns: {_value: \"Running average\"})"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUX}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"sump\" and r._field == \"rms_run_min\" and r.device == \"${device}\")\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> rename(columns: {_value: \"Running lowest\"})"
+        },
+        {
+          "refId": "E",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUX}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"sump\" and r._field == \"rms_on\" and r.device == \"${device}\")\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> rename(columns: {_value: \"Start threshold\"})"
+        },
+        {
+          "refId": "F",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUX}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"sump\" and r._field == \"rms_off\" and r.device == \"${device}\")\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> rename(columns: {_value: \"Stop threshold\"})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 4,
+            "showPoints": "auto",
+            "spanNulls": 1800000
+          },
+          "unit": "suffix: m/s\u00b2",
+          "decimals": 2,
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Idle average"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Idle peak"
+            },
+            "properties": [
+              {
+                "id": "custom.drawStyle",
+                "value": "points"
+              },
+              {
+                "id": "custom.pointSize",
+                "value": 4
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "light-green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Running average"
+            },
+            "properties": [
+              {
+                "id": "custom.drawStyle",
+                "value": "points"
+              },
+              {
+                "id": "custom.pointSize",
+                "value": 7
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Running lowest"
+            },
+            "properties": [
+              {
+                "id": "custom.drawStyle",
+                "value": "points"
+              },
+              {
+                "id": "custom.pointSize",
+                "value": 7
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "light-blue"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Start threshold"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 1
+              },
+              {
+                "id": "custom.lineInterpolation",
+                "value": "stepAfter"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Stop threshold"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "yellow"
+                }
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 1
+              },
+              {
+                "id": "custom.lineInterpolation",
+                "value": "stepAfter"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "description": "Accelerometer RMS per 10 minutes, split by whether the pump was running. For the thresholds to work, both dashed lines must sit above the idle readings and below \"Running lowest\". Idle peaks above the start threshold are bumps or footsteps too short to count as a run. Change the thresholds on the board's web page (http://sm2k.local/); the lines here follow."
     }
   ]
 }

@@ -4,6 +4,8 @@
 #include <HTTPClient.h>
 #include <Preferences.h>
 #include <ArduinoOTA.h>
+#include <ESPmDNS.h>
+#include <WebServer.h>
 #include <time.h>
 #include <sys/time.h>
 #include <cstdarg>
@@ -16,11 +18,15 @@
 #include "secrets.h"
 #include "aht20.h"
 #include "jsn_sr04t.h"
+#include "web_page.h"
 
 // Bump on each flash you want to identify later -- format: YYYY-MM-DDrN.
-#define FIRMWARE_VERSION "2026-11-10r3"
+#define FIRMWARE_VERSION "2026-11-11r2"
 
 // ---- Configuration (build flags, see platformio.ini) ------------------------
+// The thresholds and pit numbers below are the DEFAULTS. Each can be changed
+// from the web page (http://sm2k.local/) without reflashing; changed values are
+// kept in NVS and read into `cfg` at boot (see "Calibration settings").
 // DEVICE_NAME appears in every ntfy message and as the InfluxDB "device" tag;
 // keep it to plain characters (no spaces, quotes or commas).
 #ifndef DEVICE_NAME
@@ -99,7 +105,7 @@ const uint32_t LED_FLASH_HALF_PERIOD_MS = 500;
 // ---- Vibration detection --------------------------------------------------
 // Samples are high-passed against a slow per-axis baseline (removes gravity and
 // mounting angle), then RMS'd over a short window. Tune the thresholds from the
-// "rms=" values printed over serial while the pump is idle and running.
+// web page or the Grafana vibration panel, with the pump idle and running.
 const uint32_t SAMPLE_PERIOD_US  = 2500;   // 400 Hz, matches accel data rate
 const uint16_t SAMPLES_PER_WINDOW = 100;   // 250 ms windows
 // High-pass cutoff ~ alpha * fs / 2pi = ~13 Hz: rejects footsteps / house rumble
@@ -142,7 +148,7 @@ const uint32_t READING_PERIOD_S   = 600;
 // Points waiting for Telegraf, oldest first. 150 lines covers a day of
 // 10-minute readings plus pump events; if it fills, the oldest are dropped.
 const int      TG_QUEUE_SIZE      = 150;
-const int      TG_LINE_LEN        = 224;
+const int      TG_LINE_LEN        = 320;
 const int      TG_BATCH_LINES     = 20;
 const uint32_t TG_RETRY_MS        = 30000;
 const uint32_t TG_DOWN_ALERT_MS   = 1800000;  // alert after 30 min without a successful send
@@ -225,7 +231,7 @@ uint32_t runStartMs = 0;
 uint32_t lastStatusMs = 0;
 float lastRms = 0;
 float maxRmsSinceStatus = 0;   // loudest window since the last status line
-int   loudWindowsSinceStatus = 0; // windows >= OFF_RMS_THRESHOLD since the last status line
+int   loudWindowsSinceStatus = 0; // windows >= the stop threshold since the last status line
 int lastRecordedState = -1;    // last pump event recorded: 1 start, 0 stop, -1 unknown; persisted in NVS
 
 // Pump statistics since boot (the daily reboot makes this roughly a day) and
@@ -313,6 +319,54 @@ bool     otaTrial = false;     // running a fresh OTA image that hasn't passed i
 uint8_t  otaRequiredHealth = HEALTH_ACCEL;
 volatile bool otaDone = false;
 
+// ---- Calibration settings ---------------------------------------------------
+// Changeable from the web page; kept in NVS (keys c_*). Defaults are the build
+// flags above.
+struct Settings {
+  float    onRms, offRms;              // m/s^2 RMS
+  uint32_t runConfirmMs, stopConfirmMs;
+  float    sensorToFloorCm, highWaterCm, highWaterHystCm, minDropCm;
+};
+const Settings DEFAULT_SETTINGS = { ON_RMS_THRESHOLD, OFF_RMS_THRESHOLD, RUN_CONFIRM_MS, STOP_CONFIRM_MS,
+                                    SENSOR_TO_FLOOR_CM, HIGH_WATER_CM, HIGH_WATER_HYST_CM, MIN_DROP_CM };
+Settings cfg = DEFAULT_SETTINGS;
+
+// ---- Vibration statistics (for calibration) -----------------------------------
+// Window RMS values, split by whether the pump was idle or running. Windows
+// seen while a start or stop is still being confirmed wait in vibPending and
+// are counted once it's known which state they belonged to.
+struct RmsAcc {
+  double   sum = 0;
+  uint32_t n = 0;
+  float    mn = 0, mx = 0;
+  void add(float v) { if (!n || v < mn) mn = v; if (!n || v > mx) mx = v; sum += v; n++; }
+  void absorb(const RmsAcc &o) {
+    if (!o.n) return;
+    if (!n || o.mn < mn) mn = o.mn;
+    if (!n || o.mx > mx) mx = o.mx;
+    sum += o.sum; n += o.n;
+  }
+  float avg() const { return n ? (float)(sum / n) : 0; }
+  void reset() { *this = RmsAcc(); }
+};
+RmsAcc   vibIdle, vibRun;       // since the last 10-minute reading
+RmsAcc   vibIdleBoot;           // idle, since boot
+RmsAcc   vibThisRun, vibLastRun;
+RmsAcc   vibPending;
+float    lastRunSeconds = 0;
+uint32_t lastRunEndMs = 0;
+float    statusMaxRms = 0;      // loudest window in the last full second (for the web page)
+
+// ---- Log kept for the web page -------------------------------------------------
+// The last LOG_LINES log lines (not the once-a-second status line).
+const int LOG_LINES    = 120;
+const int LOG_LINE_LEN = 160;
+char     logRing[LOG_LINES][LOG_LINE_LEN];
+uint32_t logSeq = 0;            // lines logged so far; line i is logRing[i % LOG_LINES]
+bool     logKeep = true;        // false while printing a line that shouldn't be kept
+
+WebServer web(80);
+
 // The Arduino core marks a new OTA image good as soon as it boots unless this
 // returns true; the health check in checkOtaTrial() does it instead.
 extern "C" bool verifyRollbackLater() { return true; }
@@ -341,7 +395,12 @@ void logf(const char *fmt, ...) {
   va_start(args, fmt);
   vsnprintf(msg, sizeof(msg), fmt, args);
   va_end(args);
-  Serial.printf("[%s] %s\r\n", logTimestamp(), msg);
+  const char *ts = logTimestamp();
+  Serial.printf("[%s] %s\r\n", ts, msg);
+  if (logKeep) {
+    snprintf(logRing[logSeq % LOG_LINES], LOG_LINE_LEN, "[%s] %s", ts, msg);
+    logSeq++;
+  }
 }
 
 // Formats when something happened, ageMs ago (state changes are confirmed
@@ -925,6 +984,8 @@ void accelLost(const char *why) {
   }
   aboveSince = 0;
   belowSince = 0;
+  vibPending.reset();
+  vibThisRun.reset();
   logf("[I2C] accelerometer %s; pump detection paused, retrying every %lu s",
        why, (unsigned long)(ACCEL_RETRY_MS / 1000));
   if (accelAlerted) return;
@@ -1032,7 +1093,7 @@ void finishDropCheck(float after) {
   }
 
   float drop = before - after;
-  bool ok = drop >= MIN_DROP_CM;
+  bool ok = drop >= cfg.minDropCm;
   logf("Pump cycle: on at %.1f cm, off at %.1f cm, dropped %.1f cm in %.1f s%s",
        before, after, drop, dropRunSeconds, ok ? "" : " -- LESS THAN EXPECTED");
   addField(fields, sizeof(fields), "drop_cm=%.1f", drop);
@@ -1042,7 +1103,7 @@ void finishDropCheck(float after) {
     notify(PRIO_ALERT, "warning", DEVICE_NAME ": pump ran but level didn't drop",
            "Ran %.1f s; water %.1f -> %.1f cm (dropped %.1f cm, expected at least %.1f). "
            "Check the discharge line, check valve and pump.",
-           dropRunSeconds, before, after, drop, MIN_DROP_CM);
+           dropRunSeconds, before, after, drop, cfg.minDropCm);
   }
 }
 
@@ -1076,6 +1137,15 @@ void setRunState(bool running, uint32_t eventMs) {
     logf("%s STOPPED - ran %.1f s (cycle %lu, total run %.1f s)", DEVICE_NAME,
          seconds, (unsigned long)cycleCount, totalRunMs / 1000.0);
     addField(fields, sizeof(fields), "event=\"stop\",running=0i,seconds=%.1f", seconds);
+    // How hard the pump shook during this run, for setting the thresholds.
+    if (vibThisRun.n) {
+      addField(fields, sizeof(fields), "rms_avg=%.3f,rms_min=%.3f", vibThisRun.avg(), vibThisRun.mn);
+      vibLastRun = vibThisRun;
+      lastRunSeconds = seconds;
+      lastRunEndMs = millis();
+      logf("[vib] run: average %.3f, lowest %.3f, highest %.3f m/s^2 RMS", vibThisRun.avg(), vibThisRun.mn, vibThisRun.mx);
+    }
+    vibThisRun.reset();
     notify(PRIO_PUMP, "", DEVICE_NAME " stopped", "Stopped at %s (ran %.1f s)", at, seconds);
     dropCheckPending = true;
     dropStopMs = eventMs;
@@ -1086,31 +1156,59 @@ void setRunState(bool running, uint32_t eventMs) {
   saveLastRecordedState(lastRecordedState);
 }
 
+void countIdle(const RmsAcc &a)    { vibIdle.absorb(a); vibIdleBoot.absorb(a); }
+void countIdle(float rms)          { vibIdle.add(rms); vibIdleBoot.add(rms); }
+void countRunning(const RmsAcc &a) { vibRun.absorb(a); vibThisRun.absorb(a); }
+void countRunning(float rms)       { vibRun.add(rms); vibThisRun.add(rms); }
+
 // Called once per window with that window's RMS.
 void processWindow(float rms, uint32_t now) {
   lastRms = rms;
   if (rms > maxRmsSinceStatus) maxRmsSinceStatus = rms;
-  if (rms >= OFF_RMS_THRESHOLD) loudWindowsSinceStatus++;
+  if (rms >= cfg.offRms) loudWindowsSinceStatus++;
   if (!accelOk) return;  // no pump detection without the accelerometer
 
-  // Debounced running/stopped state.
-  if (rms > ON_RMS_THRESHOLD) {
+  // Debounced running/stopped state. Each window is also counted in the idle or
+  // running vibration statistics; windows seen while a start or stop is being
+  // confirmed wait in vibPending until it's known which they were.
+  if (rms > cfg.onRms) {
     if (!aboveSince) aboveSince = now;
     belowSince = 0;
-    if (!deviceRunning && now - aboveSince >= RUN_CONFIRM_MS) {
-      setRunState(true, aboveSince);
+    if (deviceRunning) {
+      countRunning(vibPending);   // a stop that didn't happen
+      vibPending.reset();
+      countRunning(rms);
+    } else {
+      vibPending.add(rms);
+      if (now - aboveSince >= cfg.runConfirmMs) {
+        countRunning(vibPending);
+        vibPending.reset();
+        setRunState(true, aboveSince);
+      }
     }
-  } else if (rms < OFF_RMS_THRESHOLD) {
+  } else if (rms < cfg.offRms) {
     if (!belowSince) belowSince = now;
     aboveSince = 0;
-    if (deviceRunning && now - belowSince >= STOP_CONFIRM_MS) {
-      setRunState(false, belowSince);
+    if (!deviceRunning) {
+      countIdle(vibPending);      // a start that didn't happen (a bump, footsteps)
+      vibPending.reset();
+      countIdle(rms);
+    } else {
+      vibPending.add(rms);
+      if (now - belowSince >= cfg.stopConfirmMs) {
+        countIdle(vibPending);
+        vibPending.reset();
+        setRunState(false, belowSince);
+      }
     }
   } else {
     // Hysteresis band: neither counts toward starting a run (footsteps are
     // impulsive, a motor is continuous) nor toward ending one.
     aboveSince = 0;
     belowSince = 0;
+    if (deviceRunning) { countRunning(vibPending); countRunning(rms); }
+    else               { countIdle(vibPending);    countIdle(rms); }
+    vibPending.reset();
   }
 }
 
@@ -1142,7 +1240,7 @@ float soundCmPerUs(uint32_t now) {
 }
 
 void checkHighWater(uint32_t now) {
-  bool high = levelNearLimit || levelCm >= HIGH_WATER_CM;
+  bool high = levelNearLimit || levelCm >= cfg.highWaterCm;
   if (!highWater && high) {
     highWater = true;
     lastHighAlertMs = now;
@@ -1151,9 +1249,9 @@ void checkHighWater(uint32_t now) {
     addField(fields, sizeof(fields), "type=\"high_water\",active=1i,level_cm=%.1f", levelCm);
     tgPoint("sump_alarm", fields);
     notify(PRIO_URGENT, "rotating_light", DEVICE_NAME ": HIGH WATER",
-           "Water %s (alarm at %.1f cm). Pump %s.", levelText().c_str(), HIGH_WATER_CM,
+           "Water %s (alarm at %.1f cm). Pump %s.", levelText().c_str(), cfg.highWaterCm,
            deviceRunning ? "running" : "not running");
-  } else if (highWater && !levelNearLimit && levelCm < HIGH_WATER_CM - HIGH_WATER_HYST_CM) {
+  } else if (highWater && !levelNearLimit && levelCm < cfg.highWaterCm - cfg.highWaterHystCm) {
     highWater = false;
     logf("High water cleared: %s", levelText().c_str());
     char fields[96] = "";
@@ -1171,7 +1269,7 @@ void checkHighWaterRepeat(uint32_t now) {
   lastHighAlertMs = now;
   if (levelFresh(now)) {
     notify(PRIO_URGENT, "rotating_light", DEVICE_NAME ": STILL HIGH WATER",
-           "Water %s (alarm at %.1f cm). Pump %s.", levelText().c_str(), HIGH_WATER_CM,
+           "Water %s (alarm at %.1f cm). Pump %s.", levelText().c_str(), cfg.highWaterCm,
            deviceRunning ? "running" : "not running");
   } else {
     notify(PRIO_URGENT, "rotating_light", DEVICE_NAME ": STILL HIGH WATER",
@@ -1224,7 +1322,7 @@ void evaluateBurst(uint32_t now) {
     notify(PRIO_INFO, "white_check_mark", DEVICE_NAME ": level sensor OK", "Level readings are back.");
   }
 
-  float depth = SENSOR_TO_FLOOR_CM - dist;
+  float depth = cfg.sensorToFloorCm - dist;
   // The first reading after boot has nothing to compare with, so it has to be
   // confirmed by a second burst (a loose contact can otherwise raise the high
   // water alarm on one bad reading).
@@ -1375,9 +1473,16 @@ void checkPeriodicReading(uint32_t now) {
   addField(fields, sizeof(fields), "run_s=%.1f", periodRunMs / 1000.0f);
   addField(fields, sizeof(fields), "rssi=%di", (int)WiFi.RSSI());
   addField(fields, sizeof(fields), "heap=%lui", (unsigned long)ESP.getFreeHeap());
+  // Vibration over this period, split by pump state, and the thresholds in
+  // force, so the dashboard can show whether they sit between the two.
+  if (vibIdle.n) addField(fields, sizeof(fields), "rms_idle_avg=%.3f,rms_idle_max=%.3f", vibIdle.avg(), vibIdle.mx);
+  if (vibRun.n)  addField(fields, sizeof(fields), "rms_run_avg=%.3f,rms_run_min=%.3f", vibRun.avg(), vibRun.mn);
+  addField(fields, sizeof(fields), "rms_on=%.3f,rms_off=%.3f", cfg.onRms, cfg.offRms);
   tgPoint("sump", fields);
   periodCycles = 0;
   periodRunMs = 0;
+  vibIdle.reset();
+  vibRun.reset();
 }
 
 void sendDailyReport(uint32_t now) {
@@ -1536,6 +1641,208 @@ void checkWiFiWatchdog() {
 // ==========================================
 // Arduino entry points
 // ==========================================
+// ==========================================
+// Calibration settings (NVS) and the web page
+// ==========================================
+// Returns nullptr if the settings make sense, or what's wrong with them.
+const char *settingsProblem(const Settings &c) {
+  if (!(c.onRms >= 0.05f && c.onRms <= 20.0f)) return "The start threshold must be between 0.05 and 20 m/s^2.";
+  if (!(c.offRms >= 0.02f && c.offRms <= c.onRms * 0.95f)) return "The stop threshold must be at least 0.02 and clearly below the start threshold.";
+  if (c.runConfirmMs < 500 || c.runConfirmMs > 60000) return "The start time must be between 0.5 and 60 seconds.";
+  if (c.stopConfirmMs < 500 || c.stopConfirmMs > 60000) return "The stop time must be between 0.5 and 60 seconds.";
+  if (!(c.sensorToFloorCm >= 30.0f && c.sensorToFloorCm <= LEVEL_MAX_CM)) return "Sensor to pit floor must be between 30 and 450 cm.";
+  if (!(c.highWaterCm >= 1.0f && c.highWaterCm < c.sensorToFloorCm)) return "The high-water depth must be at least 1 cm and less than the sensor-to-floor distance.";
+  if (!(c.highWaterHystCm >= 0.5f && c.highWaterHystCm <= c.highWaterCm)) return "The alarm-clear distance must be between 0.5 cm and the high-water depth.";
+  if (!(c.minDropCm >= 0.0f && c.minDropCm <= 100.0f)) return "The expected drop must be between 0 and 100 cm.";
+  return nullptr;
+}
+
+void loadSettings() {
+  Settings c = DEFAULT_SETTINGS;
+  prefs.begin(NVS_NS, false);
+  bool any = prefs.isKey("c_on");
+  if (any) {
+    c.onRms           = prefs.getFloat("c_on", c.onRms);
+    c.offRms          = prefs.getFloat("c_off", c.offRms);
+    c.runConfirmMs    = prefs.getULong("c_runms", c.runConfirmMs);
+    c.stopConfirmMs   = prefs.getULong("c_stopms", c.stopConfirmMs);
+    c.sensorToFloorCm = prefs.getFloat("c_floor", c.sensorToFloorCm);
+    c.highWaterCm     = prefs.getFloat("c_high", c.highWaterCm);
+    c.highWaterHystCm = prefs.getFloat("c_hyst", c.highWaterHystCm);
+    c.minDropCm       = prefs.getFloat("c_drop", c.minDropCm);
+  }
+  prefs.end();
+  const char *problem = settingsProblem(c);
+  if (problem) {
+    logf("[cfg] saved settings rejected (%s); using the firmware defaults", problem);
+    c = DEFAULT_SETTINGS;
+  }
+  cfg = c;
+  logf("[cfg] %s: start %.2f / stop %.2f m/s^2, confirm %.1f / %.1f s, floor %.1f cm, high water %.1f cm (-%.1f), drop %.1f cm",
+       any && !problem ? "saved settings" : "firmware defaults", cfg.onRms, cfg.offRms, cfg.runConfirmMs / 1000.0f,
+       cfg.stopConfirmMs / 1000.0f, cfg.sensorToFloorCm, cfg.highWaterCm, cfg.highWaterHystCm, cfg.minDropCm);
+}
+
+// Puts new settings into force and saves them (or, with useDefaults, forgets
+// the saved ones). Depths already measured are shifted if the sensor-to-floor
+// distance changed, so the level doesn't appear to jump.
+void applySettings(const Settings &c, bool useDefaults) {
+  float shift = c.sensorToFloorCm - cfg.sensorToFloorCm;
+  cfg = c;
+  prefs.begin(NVS_NS, false);
+  if (useDefaults) {
+    for (const char *k : {"c_on", "c_off", "c_runms", "c_stopms", "c_floor", "c_high", "c_hyst", "c_drop"}) prefs.remove(k);
+  } else {
+    prefs.putFloat("c_on", c.onRms);
+    prefs.putFloat("c_off", c.offRms);
+    prefs.putULong("c_runms", c.runConfirmMs);
+    prefs.putULong("c_stopms", c.stopConfirmMs);
+    prefs.putFloat("c_floor", c.sensorToFloorCm);
+    prefs.putFloat("c_high", c.highWaterCm);
+    prefs.putFloat("c_hyst", c.highWaterHystCm);
+    prefs.putFloat("c_drop", c.minDropCm);
+  }
+  prefs.end();
+  if (shift != 0) {
+    if (haveLevel) levelCm += shift;
+    if (!isnan(maxLevelCm)) maxLevelCm += shift;
+    if (!isnan(runLevelBefore)) runLevelBefore += shift;
+    candidateValid = false;
+  }
+  // The debounce timers were measured against the old thresholds.
+  aboveSince = 0;
+  belowSince = 0;
+  logf("[cfg] %s: start %.2f / stop %.2f m/s^2, confirm %.1f / %.1f s, floor %.1f cm, high water %.1f cm (-%.1f), drop %.1f cm",
+       useDefaults ? "reset to firmware defaults" : "settings changed", cfg.onRms, cfg.offRms, cfg.runConfirmMs / 1000.0f,
+       cfg.stopConfirmMs / 1000.0f, cfg.sensorToFloorCm, cfg.highWaterCm, cfg.highWaterHystCm, cfg.minDropCm);
+  char fields[200] = "";
+  addField(fields, sizeof(fields), "rms_on=%.3f,rms_off=%.3f,run_confirm_s=%.1f,stop_confirm_s=%.1f", cfg.onRms, cfg.offRms,
+           cfg.runConfirmMs / 1000.0f, cfg.stopConfirmMs / 1000.0f);
+  addField(fields, sizeof(fields), "floor_cm=%.1f,high_water_cm=%.1f,hyst_cm=%.1f,min_drop_cm=%.1f", cfg.sensorToFloorCm,
+           cfg.highWaterCm, cfg.highWaterHystCm, cfg.minDropCm);
+  tgPoint("sump_config", fields);
+  uint32_t now = millis();
+  if (levelFresh(now)) checkHighWater(now);
+}
+
+// Appends to a JSON buffer; a NaN or missing number is written as null.
+void jsonAdd(char *buf, size_t len, const char *fmt, ...) {
+  size_t n = strlen(buf);
+  if (n + 1 >= len) return;
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(buf + n, len - n, fmt, args);
+  va_end(args);
+}
+void jsonNum(char *buf, size_t len, const char *key, float v, int decimals, bool valid = true) {
+  if (valid && !isnan(v)) jsonAdd(buf, len, "\"%s\":%.*f,", key, decimals, v);
+  else jsonAdd(buf, len, "\"%s\":null,", key);
+}
+
+void handleWebStatus() {
+  static char j[1100];
+  uint32_t now = millis();
+  bool lvl = levelFresh(now), air = ahtFresh(now);
+  j[0] = 0;
+  jsonAdd(j, sizeof(j), "{\"device\":\"%s\",\"version\":\"%s\",\"time\":\"%s\",\"uptime_s\":%lu,", DEVICE_NAME, FIRMWARE_VERSION,
+          logTimestamp(), (unsigned long)(now / 1000));
+  jsonAdd(j, sizeof(j), "\"state\":\"%s\",\"high_water\":%s,", !accelOk ? "no-accel" : deviceRunning ? "running" : "idle",
+          highWater ? "true" : "false");
+  jsonNum(j, sizeof(j), "rms", lastRms, 3);
+  jsonNum(j, sizeof(j), "rms_max", statusMaxRms, 3);
+  jsonNum(j, sizeof(j), "level_cm", levelCm, 1, lvl);
+  jsonNum(j, sizeof(j), "dist_cm", levelDistCm, 1, lvl && !levelNearLimit);
+  jsonAdd(j, sizeof(j), "\"level_near\":%s,", lvl && levelNearLimit ? "true" : "false");
+  jsonNum(j, sizeof(j), "temp_c", tempC, 1, air);
+  jsonNum(j, sizeof(j), "humidity", humidity, 0, air);
+  jsonAdd(j, sizeof(j), "\"rssi\":%d,\"heap\":%lu,\"tgq\":%d,\"cycles\":%lu,", (int)WiFi.RSSI(), (unsigned long)ESP.getFreeHeap(),
+          tgCount, (unsigned long)cycleCount);
+  jsonAdd(j, sizeof(j), "\"idle\":{\"n\":%lu,\"avg\":%.3f,\"max\":%.3f},", (unsigned long)vibIdleBoot.n, vibIdleBoot.avg(), vibIdleBoot.mx);
+  jsonAdd(j, sizeof(j), "\"last_run\":{\"n\":%lu,\"avg\":%.3f,\"min\":%.3f,\"max\":%.3f,\"seconds\":%.1f,\"ago_s\":%lu},",
+          (unsigned long)vibLastRun.n, vibLastRun.avg(), vibLastRun.mn, vibLastRun.mx, lastRunSeconds,
+          (unsigned long)((now - lastRunEndMs) / 1000));
+  jsonAdd(j, sizeof(j), "\"cfg\":{\"on\":%.3g,\"off\":%.3g,\"run_ms\":%lu,\"stop_ms\":%lu,\"floor_cm\":%.4g,\"high_cm\":%.4g,"
+          "\"hyst_cm\":%.4g,\"drop_cm\":%.4g}}", cfg.onRms, cfg.offRms, (unsigned long)cfg.runConfirmMs,
+          (unsigned long)cfg.stopConfirmMs, cfg.sensorToFloorCm, cfg.highWaterCm, cfg.highWaterHystCm, cfg.minDropCm);
+  web.sendHeader("Cache-Control", "no-store");
+  web.send(200, "application/json", j);
+}
+
+// GET /api/log?since=N: the first line is the number of lines logged so far
+// (pass it back as `since` next time), then every kept line from N on.
+void handleWebLog() {
+  uint32_t since = web.hasArg("since") ? (uint32_t)strtoul(web.arg("since").c_str(), nullptr, 10) : 0;
+  uint32_t oldest = logSeq > (uint32_t)LOG_LINES ? logSeq - LOG_LINES : 0;
+  if (since < oldest || since > logSeq) since = oldest;
+  String out;
+  out.reserve(16 + (logSeq - since) * 90);
+  out += logSeq;
+  out += '\n';
+  for (uint32_t i = since; i < logSeq; i++) {
+    out += logRing[i % LOG_LINES];
+    out += '\n';
+  }
+  web.sendHeader("Cache-Control", "no-store");
+  web.send(200, "text/plain; charset=utf-8", out);
+}
+
+void sendSettingsError(const char *problem) {
+  String page = F("<!doctype html><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\">"
+                  "<body style=\"font:16px system-ui;padding:24px\"><h3>Settings not saved</h3><p>");
+  page += problem;
+  page += F("</p><p><a href=\"/\">Back</a></p>");
+  web.send(400, "text/html; charset=utf-8", page);
+}
+
+// POST /settings (the form on the page). Digest authentication, so the
+// password itself never crosses the network: user "admin", the OTA password.
+void handleWebSettings() {
+  if (!web.authenticate("admin", OTA_PASSWORD)) return web.requestAuthentication(DIGEST_AUTH, "Sump Master 2000");
+  if (web.hasArg("reset")) {
+    applySettings(DEFAULT_SETTINGS, true);
+    web.sendHeader("Location", "/?reset=1");
+    web.send(303, "text/plain", "");
+    return;
+  }
+  for (const char *k : {"on", "off", "run_s", "stop_s", "floor", "high", "hyst", "drop"}) {
+    if (!web.hasArg(k) || !web.arg(k).length()) return sendSettingsError("Every field needs a number.");
+  }
+  Settings c;
+  c.onRms           = web.arg("on").toFloat();
+  c.offRms          = web.arg("off").toFloat();
+  c.runConfirmMs    = (uint32_t)lroundf(constrain(web.arg("run_s").toFloat(), 0.0f, 1000.0f) * 1000.0f);
+  c.stopConfirmMs   = (uint32_t)lroundf(constrain(web.arg("stop_s").toFloat(), 0.0f, 1000.0f) * 1000.0f);
+  c.sensorToFloorCm = web.arg("floor").toFloat();
+  c.highWaterCm     = web.arg("high").toFloat();
+  c.highWaterHystCm = web.arg("hyst").toFloat();
+  c.minDropCm       = web.arg("drop").toFloat();
+  const char *problem = settingsProblem(c);
+  if (problem) return sendSettingsError(problem);
+  applySettings(c, false);
+  web.sendHeader("Location", "/?saved=1");
+  web.send(303, "text/plain", "");
+}
+
+void setupWeb() {
+  web.enableDelay(false);  // handleClient() must return at once when nobody is connected
+  web.on("/", HTTP_GET, []() { web.send_P(200, "text/html; charset=utf-8", WEB_PAGE); });
+  web.on("/api/status", HTTP_GET, handleWebStatus);
+  web.on("/api/log", HTTP_GET, handleWebLog);
+  web.on("/settings", HTTP_POST, handleWebSettings);
+  web.onNotFound([]() { web.send(404, "text/plain", "Not found"); });
+  web.begin();
+  MDNS.addService("http", "tcp", 80);
+  logf("[web] ready: http://%s.local/ (http://%s/)", OTA_HOSTNAME, WiFi.localIP().toString().c_str());
+}
+
+// Once per 250 ms window. A request is answered in a few milliseconds, between
+// vibration samples; a few calls let one be accepted, read and answered in the
+// same window.
+void serviceWeb() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  for (int i = 0; i < 3; i++) web.handleClient();
+}
+
 void setup(void) {
   Serial.begin(115200);
   Serial.setTxTimeoutMs(0);  // never block on a stalled USB host; excess output is dropped
@@ -1557,6 +1864,7 @@ void setup(void) {
   lastRebootDay = prefs.getInt("last_reboot_day", -1);
   lastRecordedState = prefs.getInt("last_state", -1);
   prefs.end();
+  loadSettings();
 
   checkUnexpectedReset();
   checkOtaState();
@@ -1568,6 +1876,7 @@ void setup(void) {
   setupTime();
   checkBootEpoch();
   setupOta();
+  setupWeb();
   reportBoot();
   setupSensor();
   ahtReady = aht.begin();
@@ -1646,6 +1955,7 @@ void loop(void) {
   checkPeriodicReading(now);
   serviceNetwork(now);
   serviceOta();
+  serviceWeb();
   checkWiFiWatchdog();
   checkSensorWatchdog(now);
   checkLevelWatchdogs(now);
@@ -1663,9 +1973,12 @@ void loop(void) {
     else snprintf(level, sizeof(level), "--");
     if (ahtFresh(now)) snprintf(air, sizeof(air), "%.1fC/%.0f%%", tempC, humidity);
     else snprintf(air, sizeof(air), "--");
+    logKeep = false;  // once a second: serial only, it would push everything else out of the web log
     logf("rms=%.3f max=%.3f loud=%d state=%s level=%s air=%s wifi=%s tgq=%d", lastRms,
          maxRmsSinceStatus, loudWindowsSinceStatus, !accelOk ? "no-accel" : deviceRunning ? "RUNNING" : "idle", level, air,
          WiFi.status() == WL_CONNECTED ? "up" : "down", tgCount);
+    logKeep = true;
+    statusMaxRms = maxRmsSinceStatus;
     maxRmsSinceStatus = 0;
     loudWindowsSinceStatus = 0;
   }

@@ -6,6 +6,33 @@ to `FIRMWARE_VERSION` in `src/sm2k.ino`.
 Sump Master 2000 is a fork of the vibration-monitor project, taken at
 `2026-09-22r1`. Entries below that point are the original project's history.
 
+## 2026-11-11r2
+
+- **Web page on the board** (`http://sm2k.local/`, port 80): live pump state,
+  vibration (with a chart against the thresholds), water depth, temperature,
+  humidity and Wi-Fi; calibration readings (idle average and peak since boot,
+  the last run's average and lowest, suggested thresholds); the last 120 log
+  lines; and a settings form. `GET /api/status` (JSON), `GET /api/log?since=N`.
+  Requests are served once per 250 ms window, between vibration samples.
+- **Calibration settings changeable without reflashing:** both vibration
+  thresholds, both confirm times, sensor-to-floor distance, high-water depth
+  and its clear distance, and the expected drop. Saved in NVS (`c_*` keys);
+  the `platformio.ini` flags are now the defaults. Saving needs HTTP digest
+  authentication (`admin` / the OTA password). Values are range-checked; a
+  change is logged and recorded as a `sump_config` point. Changing the
+  sensor-to-floor distance shifts the current depth instead of making it jump.
+- **Vibration reported to InfluxDB:** the 10-minute `sump` point adds
+  `rms_idle_avg`, `rms_idle_max`, `rms_run_avg`, `rms_run_min` (each only if
+  there were such windows) and the thresholds in force, `rms_on` / `rms_off`.
+  A `stop` event adds that run's `rms_avg` and `rms_min`. Windows seen while a
+  start or stop is being confirmed are counted once the outcome is known.
+  `TG_LINE_LEN` 224 -> 320 for the longer line.
+- Dashboard: new panel "Vibration: idle and running, against the thresholds"
+  and a "Settings changed" annotation.
+- The once-a-second status line stays on serial only (not in the web log).
+- (r2) The page shows the pump state and HIGH WATER as two badges; in r1 the
+  alarm replaced the pump state.
+
 ## 2026-11-10r3
 
 - Vibration thresholds raised to ON 0.50 / OFF 0.30 m/s^2 RMS (were 0.40 /

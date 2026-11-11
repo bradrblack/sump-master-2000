@@ -278,6 +278,35 @@ panels.append(panel(
      "tooltip": {"mode": "multi"}},
     description="A steady fall in free heap between nightly reboots would point to a leak."))
 
+# ---- Row 8: vibration calibration ---------------------------------------------------
+def dashed(color):
+    return {"color": {"mode": "fixed", "fixedColor": color}, "custom.lineStyle": {"fill": "dash", "dash": [10, 10]},
+            "custom.fillOpacity": 0, "custom.lineWidth": 1, "custom.lineInterpolation": "stepAfter"}
+
+
+panels.append(panel(
+    "timeseries", "Vibration: idle and running, against the thresholds", 0, 58, 24, 9,
+    [tgt("A", series("sump", "rms_idle_avg", "Idle average")),
+     tgt("B", series("sump", "rms_idle_max", "Idle peak")),
+     tgt("C", series("sump", "rms_run_avg", "Running average")),
+     tgt("D", series("sump", "rms_run_min", "Running lowest")),
+     tgt("E", series("sump", "rms_on", "Start threshold")),
+     tgt("F", series("sump", "rms_off", "Stop threshold"))],
+    dict(TS_DEFAULTS, unit="suffix: m/s²", decimals=2, min=0),
+    [by_name("Idle average", {"color": {"mode": "fixed", "fixedColor": "green"}}),
+     by_name("Idle peak", dict(points(4), color={"mode": "fixed", "fixedColor": "light-green"})),
+     by_name("Running average", dict(points(7), color={"mode": "fixed", "fixedColor": "blue"})),
+     by_name("Running lowest", dict(points(7), color={"mode": "fixed", "fixedColor": "light-blue"})),
+     by_name("Start threshold", dashed("orange")),
+     by_name("Stop threshold", dashed("yellow"))],
+    {"legend": {"showLegend": True, "displayMode": "list", "placement": "bottom"},
+     "tooltip": {"mode": "multi"}},
+    description="Accelerometer RMS per 10 minutes, split by whether the pump was running. For the "
+                "thresholds to work, both dashed lines must sit above the idle readings and below "
+                "\"Running lowest\". Idle peaks above the start threshold are bumps or footsteps too "
+                "short to count as a run. Change the thresholds on the board's web page "
+                "(http://sm2k.local/); the lines here follow."))
+
 annotations = {"list": [
     {"builtIn": 1, "datasource": {"type": "grafana", "uid": "-- Grafana --"}, "enable": True,
      "hide": True, "iconColor": "rgba(0, 211, 255, 1)", "name": "Annotations & Alerts",
@@ -287,6 +316,10 @@ annotations = {"list": [
                 rng() + '  |> filter(fn: (r) => r._measurement == "sump_alarm" and r._field == "active" and '
                 + DEV + ')\n  |> group()\n  |> map(fn: (r) => ({_time: r._time, text: if r._value == 1 then '
                 '"High water" else "High water cleared"}))'}},
+    {"datasource": DS, "enable": True, "iconColor": "orange", "name": "Settings changed",
+     "target": {"refId": "Anno", "query":
+                rng() + '  |> filter(fn: (r) => r._measurement == "sump_config" and r._field == "rms_on" and '
+                + DEV + ')\n  |> group()\n  |> map(fn: (r) => ({_time: r._time, text: "Settings changed on the board"}))'}},
     {"datasource": DS, "enable": True, "iconColor": "blue", "name": "Reboots",
      "target": {"refId": "Anno", "query":
                 rng() + '  |> filter(fn: (r) => r._measurement == "sump_boot" and ' + DEV + ')\n'

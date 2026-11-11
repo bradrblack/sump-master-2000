@@ -32,6 +32,9 @@ The sketch is `src/sm2k.ino`, with small drivers for the level sensor
 - **Data to InfluxDB:** pump start/stop as it happens, and every 10 minutes the
   level, temperature, humidity and pump activity. See [Data](#data).
 - **ntfy pushes:** see [Notifications](#notifications).
+- **A web page on the board** (`http://sm2k.local/`): live readings, the recent
+  log, and the calibration settings, changeable from a phone. See
+  [Web page](#web-page).
 - **OTA updates** pushed from your computer over Wi-Fi, with automatic rollback if the
   new firmware isn't healthy. See [Updating](#updating-firmware).
 
@@ -40,8 +43,10 @@ The onboard NeoPixel (GPIO 8, dimmed) shows the state: **green** = all clear,
 **flashing purple** = high water with the pump running.
 
 Serial output (115200) prints a status line once a second:
-`rms=0.012 state=idle level=12.3cm air=17.9C/71% wifi=up tgq=0` (`tgq` is the
-number of points waiting to be sent to Telegraf).
+`rms=0.208 max=0.219 loud=0 state=idle level=12.3cm air=17.9C/71% wifi=up tgq=0`
+(`rms` is the latest 250 ms window, `max` the loudest of that second, `loud`
+how many of its windows reached the stop threshold, `tgq` the number of points
+waiting to be sent to Telegraf).
 
 ## Hardware and wiring
 
@@ -261,11 +266,12 @@ points land at the right time. All points are tagged `device=sump`.
 
 | Measurement | When | Fields |
 |---|---|---|
-| `sump` | every 10 min, on the clock | `level_cm`, `distance_cm`, `level_status` (`ok`/`near_limit`/`missing`), `temp_c`, `humidity`, `running`, `pump_sensor` (1 = accelerometer answering), `cycles` and `run_s` (for the 10 minutes), `rssi`, `heap` |
-| `sump_event` | pump start/stop | `event`, `running`, `seconds` (stop), `level_cm` (start); `note="restart"` on a post-reboot correction, `note="sensor_lost"` if the accelerometer dropped out mid-run |
+| `sump` | every 10 min, on the clock | `level_cm`, `distance_cm`, `level_status` (`ok`/`near_limit`/`missing`), `temp_c`, `humidity`, `running`, `pump_sensor` (1 = accelerometer answering), `cycles` and `run_s` (for the 10 minutes), `rssi`, `heap`; vibration for the 10 minutes: `rms_idle_avg`, `rms_idle_max`, `rms_run_avg`, `rms_run_min` (each only when there were such readings), and the thresholds in force, `rms_on`, `rms_off` |
+| `sump_event` | pump start/stop | `event`, `running`, `seconds` (stop), `rms_avg` and `rms_min` (stop: that run's vibration), `level_cm` (start); `note="restart"` on a post-reboot correction, `note="sensor_lost"` if the accelerometer dropped out mid-run |
 | `sump_cycle` | after each run | `seconds`, `level_before_cm`, `level_after_cm`, `drop_cm`, `result` (`ok`/`no_drop`/`unverified`) |
 | `sump_alarm` | high water on/off | `type`, `active`, `level_cm` |
 | `sump_boot` | each boot | `version`, `reason` |
+| `sump_config` | settings changed on the web page | `rms_on`, `rms_off`, `run_confirm_s`, `stop_confirm_s`, `floor_cm`, `high_water_cm`, `hyst_cm`, `min_drop_cm` |
 
 If Telegraf can't be reached, points queue on the board (150 lines, about a day
 of readings plus events) and are sent in order when it's back; if the queue
@@ -349,15 +355,59 @@ The firmware recovers on its own where possible and never fails silently.
 | **Unexpected reset detection** | A crash, watchdog or brownout reset is detected on the next boot and pushed. Power cycles, the reset button, flashing and deliberate restarts are not. |
 | **Stuck "running" correction** | If the board reboots mid-run and the pump is idle 15 s after boot, a `stop` (with `note="restart"`, no run length) is recorded and pushed so nothing implies it's still running. |
 
+## Web page
+
+Open `http://sm2k.local/` (or the board's IP address, printed at boot as
+`[web] ready`) from a phone or computer on the same network. No laptop or USB
+cable is needed once the board is installed.
+
+- **Live readings**, refreshed every 2 seconds: pump state, vibration, water
+  depth, air temperature and humidity, Wi-Fi signal, and a chart of the last
+  few minutes of vibration against the two thresholds.
+- **Calibration readings:** the idle vibration since the last restart (average
+  and peak), the last pump run (average and lowest), and suggested thresholds.
+- **Settings** (below), saved on the board. Saving asks for a user name and
+  password: `admin` and the OTA password from `secrets.ini`. It uses HTTP
+  digest authentication, so the password itself isn't sent over the network.
+- **Log:** the last 120 log lines (everything the serial output shows except
+  the once-a-second status line).
+
+Viewing needs no password; anyone on your network can see the readings and the
+log. The page is not reachable from the internet unless you set up a VPN.
+
+Plain-data endpoints, if you want to script against it: `GET /api/status`
+(JSON) and `GET /api/log?since=N` (text; the first line is the line count to
+pass back as `since`).
+
 ## Calibration
 
-- **Vibration thresholds:** watch the `rms=` values over serial with the pump
-  idle and running, and set `ON_RMS_THRESHOLD` / `OFF_RMS_THRESHOLD`.
-- **Pit:** set `SENSOR_TO_FLOOR_CM` to the measured distance from the sensor to
-  the empty pit floor. Every pump run is logged over serial (and in
-  `sump_cycle`) as `Pump cycle: on at X cm, off at Y cm, dropped Z cm`, so after
-  a few real cycles set `HIGH_WATER_CM` a few cm above the normal "on" level and
-  `MIN_DROP_CM` well below the normal drop.
+Every calibration value can be changed on the [web page](#web-page) without
+reflashing. The values in `platformio.ini` are the defaults a board starts with
+(and returns to with **Reset to defaults**); saved values survive restarts and
+firmware updates.
+
+| Setting | Default (`platformio.ini`) |
+|---|---|
+| Pump start / stop threshold (m/s² RMS) | `ON_RMS_THRESHOLD` 0.50 / `OFF_RMS_THRESHOLD` 0.30 |
+| Seconds of vibration / quiet to count as started / stopped | `RUN_CONFIRM_MS` / `STOP_CONFIRM_MS`, 3 s each |
+| Sensor to pit floor (cm) | `SENSOR_TO_FLOOR_CM` |
+| High-water alarm depth, and how far below it clears (cm) | `HIGH_WATER_CM`, `HIGH_WATER_HYST_CM` |
+| A run should lower the water by (cm) | `MIN_DROP_CM` |
+
+- **Vibration thresholds:** let the pump run once, then read the web page's
+  calibration readings: both thresholds belong between the idle average and
+  the last run's lowest value (the page suggests a pair). The Grafana panel
+  "Vibration: idle and running, against the thresholds" shows the same over
+  days: both dashed lines should stay above the idle readings and below
+  "Running lowest". The board on a desk idles at about 0.2 m/s².
+- **Pit:** set the sensor-to-floor distance to the measured distance from the
+  sensor to the empty pit floor (the page shows the current sensor-to-water
+  distance). Every pump run is logged (and stored in `sump_cycle`) as
+  `Pump cycle: on at X cm, off at Y cm, dropped Z cm`, so after a few real
+  cycles set the high-water depth a few cm above the normal "on" level and the
+  expected drop well below the normal drop.
+- A settings change is recorded in InfluxDB (`sump_config`) and marked on the
+  dashboard.
 
 ## Notes and gotchas
 
