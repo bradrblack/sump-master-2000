@@ -6,6 +6,12 @@ to `FIRMWARE_VERSION` in `src/sm2k.ino`.
 Sump Master 2000 is a fork of the vibration-monitor project, taken at
 `2026-09-22r1`. Entries below that point are the original project's history.
 
+## 2026-11-11r3
+
+- Web page: the HIGH WATER badge stayed visible after the alarm cleared (its
+  CSS `display` rule overrode the `hidden` attribute). The board's state and
+  the LED were right; only the page was wrong.
+
 ## 2026-11-11r2
 
 - **Web page on the board** (`http://sm2k.local/`, port 80): live pump state,

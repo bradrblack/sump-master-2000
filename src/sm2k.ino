@@ -21,7 +21,7 @@
 #include "web_page.h"
 
 // Bump on each flash you want to identify later -- format: YYYY-MM-DDrN.
-#define FIRMWARE_VERSION "2026-11-11r2"
+#define FIRMWARE_VERSION "2026-11-11r3"
 
 // ---- Configuration (build flags, see platformio.ini) ------------------------
 // The thresholds and pit numbers below are the DEFAULTS. Each can be changed

@@ -15,7 +15,7 @@ static const char WEB_PAGE[] PROGMEM = R"HTML(<!doctype html>
 main{max-width:760px;margin:0 auto}h1{font-size:19px;margin:0}h2{font-size:14px;margin:0 0 8px;color:var(--dim);text-transform:uppercase;letter-spacing:.04em}
 .top{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px}
 .sub{color:var(--dim);font-size:13px}
-.badge{display:inline-block;padding:4px 12px;border-radius:999px;color:#fff;font-weight:600;background:var(--dim)}#alarm{background:var(--bad)}
+.badge{display:inline-block;padding:4px 12px;border-radius:999px;color:#fff;font-weight:600;background:var(--dim)}#alarm{background:var(--bad)}[hidden]{display:none!important}
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:12px}
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:12px}
 .tiles .card{margin:0}.big{font-size:24px;font-weight:650;font-variant-numeric:tabular-nums}

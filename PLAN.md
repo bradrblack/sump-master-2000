@@ -4,7 +4,7 @@ Design plan and decisions for the Sump Master 2000. Last updated 2026-11-08.
 
 ## Status
 
-- **Firmware:** `2026-11-11r2` (see [CHANGELOG.md](CHANGELOG.md)). All three
+- **Firmware:** `2026-11-11r3` (see [CHANGELOG.md](CHANGELOG.md)). All three
   sensors, the high-water alarm, ntfy pushes, the nightly reboot and the
   NeoPixel status LED have run on the bench, and OTA updates with the sensors
   attached work. The board serves a web page for watching it and changing the
