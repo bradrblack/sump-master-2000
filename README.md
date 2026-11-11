@@ -1,7 +1,7 @@
 <p>
-<img align="right" src="./sm2k.png" width="30%" />
-<img align="left" src="./case.png" width="40%" />
-<img align="left" src="./pcb.png" width="40%" />
+<img align="right" src="./sm2k.png" width="40%" />
+<img align="left" src="./case.png" width="60%" />
+<img align="left" src="./pcb.png" width="60%" />
 
 </p>
 <br clear="both"/>
