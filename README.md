@@ -1,5 +1,6 @@
-<img src="./case.png" width="800" />
-<img src="./pcb.png" width="800" />
+<img align="left" src="./case.png" width="66%" />
+<img align="left" src="./pcb.png" width="66%" />
+<img align="right" src="./sm2k.png" width="33%" />
 
 # Sump Master 2000
 
