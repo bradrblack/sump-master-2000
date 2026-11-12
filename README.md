@@ -37,6 +37,8 @@ The sketch is `src/sm2k.ino`, with small drivers for the level sensor
   CRC-checked.
 - **Data to InfluxDB:** pump start/stop as it happens, and every 10 minutes the
   level, temperature, humidity and pump activity. See [Data](#data).
+- **Home Assistant (optional):** state over MQTT, found automatically through
+  MQTT Discovery. See [Home Assistant](#home-assistant).
 - **ntfy pushes:** see [Notifications](#notifications).
 - **A web page on the board** (`http://sm2k.local/`): live readings, the recent
   log, and the calibration settings, changeable from a phone. See
@@ -372,9 +374,14 @@ cable is needed once the board is installed.
   few minutes of vibration against the two thresholds.
 - **Calibration readings:** the idle vibration since the last restart (average
   and peak), the last pump run (average and lowest), and suggested thresholds.
-- **Settings** (below), saved on the board. Saving asks for a user name and
-  password: `admin` and the OTA password from `secrets.ini`. It uses HTTP
-  digest authentication, so the password itself isn't sent over the network.
+- **Settings** (calibration, below) and **Connections** (Telegraf address, ntfy
+  topic, MQTT broker and login, admin password), saved on the board. Saving
+  asks for a user name and password: `admin` and the admin password, which is
+  the OTA password from `secrets.ini` until you change it on the page. It uses
+  HTTP digest authentication, so the admin password itself isn't sent over the
+  network. Anything you type into the form (an MQTT password, a new admin
+  password) does cross your network unencrypted, since the page is plain HTTP.
+  The ntfy topic and saved passwords are never shown back.
 - **Log:** the last 120 log lines (everything the serial output shows except
   the once-a-second status line).
 
@@ -384,6 +391,37 @@ log. The page is not reachable from the internet unless you set up a VPN.
 Plain-data endpoints, if you want to script against it: `GET /api/status`
 (JSON) and `GET /api/log?since=N` (text; the first line is the line count to
 pass back as `since`).
+
+## Home Assistant
+
+The board can publish to an MQTT broker, and Home Assistant picks it up through
+MQTT Discovery as one device, "Sump Master 2000". InfluxDB/Grafana, ntfy and
+MQTT are independent: use any or all.
+
+1. In Home Assistant, install an MQTT broker (the Mosquitto add-on) and the
+   MQTT integration. The add-on needs a login: use a Home Assistant user, or
+   add one in the add-on's configuration.
+2. On the board's web page, under **Connections**, enter the broker's address
+   (host name or IP, no `mqtt://`), port (1883), and the user name and
+   password. Save. The line above the form shows "Home Assistant (MQTT)
+   connected", or why it isn't.
+3. The device appears under Settings > Devices & services > MQTT.
+
+| Entity | Notes |
+|---|---|
+| Pump (running), High water (problem) | sent at once when they change |
+| Water depth, Air temperature, Humidity, Vibration | every 30 s; "unknown" while a sensor has no current reading |
+| Last pump run (s), Pump cycles since restart | |
+| Level sensor, Pump sensor (problem) | diagnostic |
+| Wi-Fi signal, Uptime, Firmware | diagnostic |
+
+Topics: `sm2k/<device>/state` (retained JSON), `sm2k/<device>/status`
+(`online`/`offline`; the broker publishes `offline` if the board disappears, so
+Home Assistant shows the entities as unavailable), and
+`homeassistant/<type>/sm2k_<device>/<entity>/config` for discovery.
+
+The Grafana "Sump monitor silent" alert only exists if you use InfluxDB. With
+Home Assistant alone, make an automation on the device becoming unavailable.
 
 ## Calibration
 

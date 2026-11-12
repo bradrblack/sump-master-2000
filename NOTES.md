@@ -4,7 +4,17 @@ Handoff notes for the next session: the current state, how things were
 checked, and what's still to do. The design is in [PLAN.md](PLAN.md) and the
 how-to in [README.md](README.md). **Read this file and PLAN.md first.**
 
-**2026-11-11:** firmware `2026-11-11r3` is on the board (flashed OTA). It adds the web
+**2026-11-11 (afternoon): firmware `2026-11-11r4` is on the board and committed.** It adds
+MQTT / Home Assistant discovery and a "Connections" form on the web page (Telegraf, ntfy,
+MQTT, admin password, all in NVS). Tested: the form saves and rejects bad input; Telegraf
+and ntfy still work from the saved values; the board connects to the test Home Assistant
+broker (192.168.3.252:1883, login entered on the page by the user); the user confirmed in
+Home Assistant that the device appears and the Pump entity follows a run ("all good"). Not
+checked one by one: the other 12 entities' values. **Next step, agreed but not started:** Wi-Fi details from the page plus a setup
+hotspot (rule in PLAN.md, "Web page and remote calibration"). Do it while the board is on
+the desk with USB to hand.
+
+**2026-11-11 (morning):** firmware `2026-11-11r3` was on the board (flashed OTA). It adds the web
 page (`http://sm2k.local/`, or the IP; `curl` on the Mac resolves `sm2k.local` slowly, use
 the IP), settings saved in NVS and changeable from the page, and vibration fields in the
 `sump` point. Tested from the Mac: page, `/api/status`, `/api/log`, save (digest auth),

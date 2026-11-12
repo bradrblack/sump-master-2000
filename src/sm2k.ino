@@ -6,6 +6,7 @@
 #include <ArduinoOTA.h>
 #include <ESPmDNS.h>
 #include <WebServer.h>
+#include <PubSubClient.h>
 #include <time.h>
 #include <sys/time.h>
 #include <cstdarg>
@@ -15,13 +16,16 @@
 #include <esp_ota_ops.h>
 #include <esp32c3/rom/rtc.h>
 #include <Adafruit_ADXL345_U.h>
+// secrets.h is optional: everything in it can also be set from the web page.
+#if __has_include("secrets.h")
 #include "secrets.h"
+#endif
 #include "aht20.h"
 #include "jsn_sr04t.h"
 #include "web_page.h"
 
 // Bump on each flash you want to identify later -- format: YYYY-MM-DDrN.
-#define FIRMWARE_VERSION "2026-11-11r3"
+#define FIRMWARE_VERSION "2026-11-11r4"
 
 // ---- Configuration (build flags, see platformio.ini) ------------------------
 // The thresholds and pit numbers below are the DEFAULTS. Each can be changed
@@ -69,6 +73,34 @@
 // A pump run should lower the water by at least this much.
 #ifndef MIN_DROP_CM
 #define MIN_DROP_CM 5.0f
+#endif
+
+// Connections. These build-time values (secrets.h) are only the starting
+// values: each can be changed on the web page and is then kept in NVS (see
+// "Connection settings"). An empty value turns that output off.
+#ifndef WIFI_SSID
+#define WIFI_SSID ""
+#endif
+#ifndef WIFI_PASS
+#define WIFI_PASS ""
+#endif
+#ifndef TELEGRAF_URL
+#define TELEGRAF_URL ""
+#endif
+#ifndef NTFY_TOPIC
+#define NTFY_TOPIC ""
+#endif
+#ifndef MQTT_HOST
+#define MQTT_HOST ""
+#endif
+#ifndef MQTT_PORT
+#define MQTT_PORT 1883
+#endif
+#ifndef MQTT_USER
+#define MQTT_USER ""
+#endif
+#ifndef MQTT_PASS
+#define MQTT_PASS ""
 #endif
 
 // Network name for OTA uploads (sm2k.local) and DHCP.
@@ -331,6 +363,65 @@ const Settings DEFAULT_SETTINGS = { ON_RMS_THRESHOLD, OFF_RMS_THRESHOLD, RUN_CON
                                     SENSOR_TO_FLOOR_CM, HIGH_WATER_CM, HIGH_WATER_HYST_CM, MIN_DROP_CM };
 Settings cfg = DEFAULT_SETTINGS;
 
+// ---- Connection settings ------------------------------------------------------
+// Changeable from the web page; kept in NVS (keys n_*). An empty Telegraf URL,
+// ntfy topic or MQTT host turns that output off. The admin password (for
+// saving settings on the web page) starts as the OTA password.
+struct NetConfig {
+  char     wifiSsid[33];
+  char     wifiPass[65];
+  char     telegrafUrl[128];
+  char     ntfyTopic[65];
+  char     mqttHost[64];
+  uint16_t mqttPort;
+  char     mqttUser[33];
+  char     mqttPass[65];
+  char     adminPass[33];
+};
+NetConfig net;
+
+// ---- MQTT / Home Assistant ------------------------------------------------------
+// State goes to <base>/state as one retained JSON message; <base>/status is
+// "online"/"offline" (the broker publishes "offline" if the board vanishes).
+// Home Assistant finds the entities through MQTT Discovery.
+const uint32_t MQTT_RETRY_MS    = 30000;
+const uint32_t MQTT_STATE_MS    = 30000;   // state is also sent at once on a pump or alarm change
+WiFiClient   mqttNet;
+PubSubClient mqtt(mqttNet);
+char     mqttBase[48];
+uint32_t lastMqttAttemptMs = 0;
+uint32_t lastMqttStateMs = 0;
+bool     mqttDirty = true;      // state changed: publish now
+int      mqttDiscoveryIdx = -1; // next discovery message to send (-1 = none pending)
+bool     mqttFailLogged = false;
+const char *mqttProblem();
+
+struct HaEntity {
+  const char *component;   // "sensor" or "binary_sensor"
+  const char *id;          // also the key in the state JSON
+  const char *name;
+  const char *deviceClass; // "" = none
+  const char *unit;
+  const char *stateClass;
+  bool        diagnostic;
+};
+const HaEntity HA_ENTITIES[] = {
+  {"binary_sensor", "pump",           "Pump",                      "running",         "",      "",                 false},
+  {"binary_sensor", "high_water",     "High water",                "problem",         "",      "",                 false},
+  {"sensor",        "level_cm",       "Water depth",               "distance",        "cm",    "measurement",      false},
+  {"sensor",        "temp_c",         "Air temperature",           "temperature",     "°C",    "measurement",      false},
+  {"sensor",        "humidity",       "Humidity",                  "humidity",        "%",     "measurement",      false},
+  {"sensor",        "vibration",      "Vibration",                 "",                "m/s²",  "measurement",      false},
+  {"sensor",        "last_run_s",     "Last pump run",             "duration",        "s",     "",                 false},
+  {"sensor",        "cycles",         "Pump cycles since restart", "",                "",      "total_increasing", false},
+  {"binary_sensor", "level_problem",  "Level sensor",              "problem",         "",      "",                 true},
+  {"binary_sensor", "pump_sensor_problem", "Pump sensor",          "problem",         "",      "",                 true},
+  {"sensor",        "rssi",           "Wi-Fi signal",              "signal_strength", "dBm",   "measurement",      true},
+  {"sensor",        "uptime_s",       "Uptime",                    "duration",        "s",     "",                 true},
+  {"sensor",        "version",        "Firmware",                  "",                "",      "",                 true},
+};
+const int HA_ENTITY_COUNT = sizeof(HA_ENTITIES) / sizeof(HA_ENTITIES[0]);
+
 // ---- Vibration statistics (for calibration) -----------------------------------
 // Window RMS values, split by whether the pump was idle or running. Windows
 // seen while a start or stop is still being confirmed wait in vibPending and
@@ -449,15 +540,14 @@ String levelText() {
 Preferences prefs;
 
 int sendNtfy(const NtfyMsg &m) {
-#ifdef NTFY_TOPIC
-  if (WiFi.status() != WL_CONNECTED) return -1;
+  if (!net.ntfyTopic[0] || WiFi.status() != WL_CONNECTED) return -1;
   WiFiClientSecure client;
   client.setInsecure();
   client.setTimeout(5);  // seconds
   HTTPClient http;
   http.setConnectTimeout(5000);
   http.setTimeout(5000);
-  if (!http.begin(client, String("https://ntfy.sh/") + NTFY_TOPIC)) return -1;
+  if (!http.begin(client, String("https://ntfy.sh/") + net.ntfyTopic)) return -1;
   http.addHeader("Title", m.title);
   http.addHeader("Priority", String(m.priority));
   if (m.tags && m.tags[0]) http.addHeader("Tags", m.tags);
@@ -465,12 +555,9 @@ int sendNtfy(const NtfyMsg &m) {
   http.end();
   logf("[ntfy] \"%s\" -> %d", m.title, code);
   return code;
-#else
-  return -1;
-#endif
 }
 
-// Queues a push. The body is printf-formatted. Without NTFY_TOPIC it's only logged.
+// Queues a push. The body is printf-formatted. With no ntfy topic set it's only logged.
 void notify(uint8_t priority, const char *tags, const char *title, const char *fmt, ...) {
   NtfyMsg m;
   snprintf(m.title, sizeof(m.title), "%s", title);
@@ -481,7 +568,7 @@ void notify(uint8_t priority, const char *tags, const char *title, const char *f
   m.priority = priority;
   m.tags = tags;
   logf("[ntfy] %s: %s", m.title, m.body);
-#ifdef NTFY_TOPIC
+  if (!net.ntfyTopic[0]) return;
   if (ntfyCount == NTFY_QUEUE_SIZE) {
     logf("[ntfy] queue full, dropping oldest message");
     ntfyHead = (ntfyHead + 1) % NTFY_QUEUE_SIZE;
@@ -489,7 +576,6 @@ void notify(uint8_t priority, const char *tags, const char *title, const char *f
   }
   ntfyQueue[(ntfyHead + ntfyCount) % NTFY_QUEUE_SIZE] = m;
   ntfyCount++;
-#endif
 }
 
 // Sends the oldest queued push. Returns true if one was sent.
@@ -559,7 +645,10 @@ void tgPoint(const char *measurement, const char *fields, uint32_t ageMs = 0) {
 
 // POSTs up to TG_BATCH_LINES queued points. Returns true on success.
 bool serviceTelegraf(uint32_t now, bool force = false) {
-#ifdef TELEGRAF_URL
+  if (!net.telegrafUrl[0]) {
+    tgCount = 0;  // nowhere to send; the points were logged when queued
+    return false;
+  }
   if (tgCount == 0 || WiFi.status() != WL_CONNECTED) return false;
   if (!force && lastTgFailMs && now - lastTgFailMs < TG_RETRY_MS) return false;
 
@@ -575,7 +664,7 @@ bool serviceTelegraf(uint32_t now, bool force = false) {
   http.setConnectTimeout(2000);
   http.setTimeout(4000);
   int code = -1;
-  if (http.begin(client, TELEGRAF_URL)) {
+  if (http.begin(client, net.telegrafUrl)) {
     http.addHeader("Content-Type", "text/plain; charset=utf-8");
     code = http.POST(body);
     http.end();
@@ -603,10 +692,6 @@ bool serviceTelegraf(uint32_t now, bool force = false) {
     lastTgFailMs = now ? now : 1;
   }
   return sent;
-#else
-  tgCount = 0;  // nowhere to send; the points were logged when queued
-  return false;
-#endif
 }
 
 // A Telegraf outage doesn't reboot the board (that can't fix the server);
@@ -1152,6 +1237,7 @@ void setRunState(bool running, uint32_t eventMs) {
     dropRunSeconds = seconds;
   }
   tgPoint("sump_event", fields, ageMs);
+  mqttDirty = true;
   lastRecordedState = running ? 1 : 0;
   saveLastRecordedState(lastRecordedState);
 }
@@ -1243,6 +1329,7 @@ void checkHighWater(uint32_t now) {
   bool high = levelNearLimit || levelCm >= cfg.highWaterCm;
   if (!highWater && high) {
     highWater = true;
+    mqttDirty = true;
     lastHighAlertMs = now;
     logf("HIGH WATER: %s", levelText().c_str());
     char fields[96] = "";
@@ -1253,6 +1340,7 @@ void checkHighWater(uint32_t now) {
            deviceRunning ? "running" : "not running");
   } else if (highWater && !levelNearLimit && levelCm < cfg.highWaterCm - cfg.highWaterHystCm) {
     highWater = false;
+    mqttDirty = true;
     logf("High water cleared: %s", levelText().c_str());
     char fields[96] = "";
     addField(fields, sizeof(fields), "type=\"high_water\",active=0i,level_cm=%.1f", levelCm);
@@ -1486,9 +1574,7 @@ void checkPeriodicReading(uint32_t now) {
 }
 
 void sendDailyReport(uint32_t now) {
-#ifndef NTFY_TOPIC
-  return;
-#endif
+  if (!net.ntfyTopic[0]) return;
   char level[80], climate[64], since[32] = "boot", stats[160];
   if (levelFresh(now)) snprintf(level, sizeof(level), "%s", levelText().c_str());
   else snprintf(level, sizeof(level), "no current reading");
@@ -1560,7 +1646,7 @@ void startNetwork() {
   WiFi.mode(WIFI_STA);
   WiFi.setTxPower(WIFI_TX_POWER);
   WiFi.setAutoReconnect(true);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  WiFi.begin(net.wifiSsid, net.wifiPass);
 }
 
 // Bounded connect at boot: reboot and retry rather than sit there offline.
@@ -1740,7 +1826,7 @@ void jsonNum(char *buf, size_t len, const char *key, float v, int decimals, bool
 }
 
 void handleWebStatus() {
-  static char j[1100];
+  static char j[1500];
   uint32_t now = millis();
   bool lvl = levelFresh(now), air = ahtFresh(now);
   j[0] = 0;
@@ -1762,8 +1848,14 @@ void handleWebStatus() {
           (unsigned long)vibLastRun.n, vibLastRun.avg(), vibLastRun.mn, vibLastRun.mx, lastRunSeconds,
           (unsigned long)((now - lastRunEndMs) / 1000));
   jsonAdd(j, sizeof(j), "\"cfg\":{\"on\":%.3g,\"off\":%.3g,\"run_ms\":%lu,\"stop_ms\":%lu,\"floor_cm\":%.4g,\"high_cm\":%.4g,"
-          "\"hyst_cm\":%.4g,\"drop_cm\":%.4g}}", cfg.onRms, cfg.offRms, (unsigned long)cfg.runConfirmMs,
+          "\"hyst_cm\":%.4g,\"drop_cm\":%.4g},", cfg.onRms, cfg.offRms, (unsigned long)cfg.runConfirmMs,
           (unsigned long)cfg.stopConfirmMs, cfg.sensorToFloorCm, cfg.highWaterCm, cfg.highWaterHystCm, cfg.minDropCm);
+  // Connections. The ntfy topic and the passwords are secrets, so only whether
+  // they're set is shown (this endpoint needs no login).
+  jsonAdd(j, sizeof(j), "\"conn\":{\"wifi\":\"%s\",\"tg_url\":\"%s\",\"ntfy\":%s,\"mqtt_host\":\"%s\",\"mqtt_port\":%u,"
+          "\"mqtt_user\":\"%s\",\"mqtt_pass\":%s,\"mqtt\":\"%s\"}}", net.wifiSsid, net.telegrafUrl,
+          net.ntfyTopic[0] ? "true" : "false", net.mqttHost, (unsigned)net.mqttPort, net.mqttUser,
+          net.mqttPass[0] ? "true" : "false", !net.mqttHost[0] ? "off" : mqtt.connected() ? "connected" : mqttProblem());
   web.sendHeader("Cache-Control", "no-store");
   web.send(200, "application/json", j);
 }
@@ -1794,10 +1886,18 @@ void sendSettingsError(const char *problem) {
   web.send(400, "text/html; charset=utf-8", page);
 }
 
-// POST /settings (the form on the page). Digest authentication, so the
-// password itself never crosses the network: user "admin", the OTA password.
+// Digest authentication, so the admin password itself never crosses the
+// network: user "admin", and the admin password (the OTA password until it's
+// changed on the page). Asks the browser for them and returns false if needed.
+bool webAuthorized() {
+  if (web.authenticate("admin", net.adminPass)) return true;
+  web.requestAuthentication(DIGEST_AUTH, "Sump Master 2000");
+  return false;
+}
+
+// POST /settings (the calibration form on the page).
 void handleWebSettings() {
-  if (!web.authenticate("admin", OTA_PASSWORD)) return web.requestAuthentication(DIGEST_AUTH, "Sump Master 2000");
+  if (!webAuthorized()) return;
   if (web.hasArg("reset")) {
     applySettings(DEFAULT_SETTINGS, true);
     web.sendHeader("Location", "/?reset=1");
@@ -1823,12 +1923,215 @@ void handleWebSettings() {
   web.send(303, "text/plain", "");
 }
 
+// ==========================================
+// Connection settings (NVS)
+// ==========================================
+// True if every character is printable ASCII other than space, quotes and
+// backslash (so values can go into JSON, URLs and headers as they are).
+bool plainText(const char *s) {
+  for (; *s; s++) if (*s <= ' ' || *s > '~' || *s == '"' || *s == '\\' || *s == '\'') return false;
+  return true;
+}
+
+void loadNetString(const char *key, char *out, size_t len, const char *fallback) {
+  if (prefs.isKey(key)) prefs.getString(key, out, len);
+  else snprintf(out, len, "%s", fallback);
+}
+
+void loadNetConfig() {
+  prefs.begin(NVS_NS, false);
+  loadNetString("n_ssid", net.wifiSsid, sizeof(net.wifiSsid), WIFI_SSID);
+  loadNetString("n_wpass", net.wifiPass, sizeof(net.wifiPass), WIFI_PASS);
+  loadNetString("n_tgurl", net.telegrafUrl, sizeof(net.telegrafUrl), TELEGRAF_URL);
+  loadNetString("n_ntfy", net.ntfyTopic, sizeof(net.ntfyTopic), NTFY_TOPIC);
+  loadNetString("n_mhost", net.mqttHost, sizeof(net.mqttHost), MQTT_HOST);
+  loadNetString("n_muser", net.mqttUser, sizeof(net.mqttUser), MQTT_USER);
+  loadNetString("n_mpass", net.mqttPass, sizeof(net.mqttPass), MQTT_PASS);
+  loadNetString("n_admin", net.adminPass, sizeof(net.adminPass), OTA_PASSWORD);
+  net.mqttPort = prefs.getUShort("n_mport", MQTT_PORT);
+  prefs.end();
+  logf("[net] Wi-Fi \"%s\"; Telegraf %s; ntfy %s; MQTT %s%s", net.wifiSsid, net.telegrafUrl[0] ? net.telegrafUrl : "off",
+       net.ntfyTopic[0] ? "on" : "off", net.mqttHost[0] ? net.mqttHost : "off", net.mqttUser[0] ? " (with login)" : "");
+}
+
+void saveNetConfig() {
+  prefs.begin(NVS_NS, false);
+  prefs.putString("n_ssid", net.wifiSsid);
+  prefs.putString("n_wpass", net.wifiPass);
+  prefs.putString("n_tgurl", net.telegrafUrl);
+  prefs.putString("n_ntfy", net.ntfyTopic);
+  prefs.putString("n_mhost", net.mqttHost);
+  prefs.putString("n_muser", net.mqttUser);
+  prefs.putString("n_mpass", net.mqttPass);
+  prefs.putString("n_admin", net.adminPass);
+  prefs.putUShort("n_mport", net.mqttPort);
+  prefs.end();
+}
+
+// ==========================================
+// MQTT / Home Assistant
+// ==========================================
+// Why the last connection attempt failed, in words.
+const char *mqttProblem() {
+  switch (mqtt.state()) {
+    case MQTT_CONNECT_BAD_CREDENTIALS:
+    case MQTT_CONNECT_UNAUTHORIZED:    return "the broker refused the user name or password";
+    case MQTT_CONNECT_FAILED:          return "no answer from the broker";
+    case MQTT_CONNECTION_TIMEOUT:      return "the broker stopped answering";
+    case MQTT_CONNECTION_LOST:         return "the connection dropped";
+    case MQTT_CONNECT_BAD_CLIENT_ID:   return "the broker refused the client ID";
+    case MQTT_CONNECT_UNAVAILABLE:     return "the broker is not accepting connections";
+    default:                           return "not connected";
+  }
+}
+
+void setupMqtt() {
+  snprintf(mqttBase, sizeof(mqttBase), "sm2k/%s", DEVICE_NAME);
+  mqtt.setBufferSize(1024);
+  mqtt.setKeepAlive(30);
+  mqtt.setSocketTimeout(3);          // seconds
+  mqttNet.setConnectionTimeout(2000);
+}
+
+// Tells Home Assistant about one entity (retained, so it survives HA restarts).
+bool publishHaDiscovery(const HaEntity &e) {
+  char topic[96], msg[760];
+  snprintf(topic, sizeof(topic), "homeassistant/%s/sm2k_%s/%s/config", e.component, DEVICE_NAME, e.id);
+  int n = snprintf(msg, sizeof(msg),
+                   "{\"name\":\"%s\",\"uniq_id\":\"sm2k_%s_%s\",\"stat_t\":\"%s/state\",\"avty_t\":\"%s/status\","
+                   "\"val_tpl\":\"{{ value_json.%s | default('None') }}\"",
+                   e.name, DEVICE_NAME, e.id, mqttBase, mqttBase, e.id);
+  if (e.deviceClass[0]) n += snprintf(msg + n, sizeof(msg) - n, ",\"dev_cla\":\"%s\"", e.deviceClass);
+  if (e.unit[0])        n += snprintf(msg + n, sizeof(msg) - n, ",\"unit_of_meas\":\"%s\"", e.unit);
+  if (e.stateClass[0])  n += snprintf(msg + n, sizeof(msg) - n, ",\"stat_cla\":\"%s\"", e.stateClass);
+  if (e.diagnostic)     n += snprintf(msg + n, sizeof(msg) - n, ",\"ent_cat\":\"diagnostic\"");
+  n += snprintf(msg + n, sizeof(msg) - n,
+                ",\"dev\":{\"ids\":[\"sm2k_%s\"],\"name\":\"Sump Master 2000\",\"mf\":\"bradrblack\","
+                "\"mdl\":\"Sump Master 2000\",\"sw\":\"%s\",\"cu\":\"http://%s/\"}}",
+                DEVICE_NAME, FIRMWARE_VERSION, WiFi.localIP().toString().c_str());
+  if (n >= (int)sizeof(msg)) return false;
+  return mqtt.publish(topic, msg, true);
+}
+
+// The whole state as one retained JSON message. A reading that isn't current
+// is left out, which Home Assistant shows as "unknown".
+bool publishMqttState(uint32_t now) {
+  char topic[64], msg[520] = "{";
+  snprintf(topic, sizeof(topic), "%s/state", mqttBase);
+  bool lvl = levelFresh(now), air = ahtFresh(now);
+  jsonAdd(msg, sizeof(msg), "\"pump\":\"%s\",\"high_water\":\"%s\",", deviceRunning ? "ON" : "OFF", highWater ? "ON" : "OFF");
+  if (lvl) jsonAdd(msg, sizeof(msg), "\"level_cm\":%.1f,", levelCm);
+  if (air) jsonAdd(msg, sizeof(msg), "\"temp_c\":%.1f,\"humidity\":%.0f,", tempC, humidity);
+  if (accelOk) jsonAdd(msg, sizeof(msg), "\"vibration\":%.3f,", statusMaxRms);
+  if (vibLastRun.n) jsonAdd(msg, sizeof(msg), "\"last_run_s\":%.1f,", lastRunSeconds);
+  jsonAdd(msg, sizeof(msg), "\"cycles\":%lu,\"level_problem\":\"%s\",\"pump_sensor_problem\":\"%s\",",
+          (unsigned long)cycleCount, lvl ? "OFF" : "ON", accelOk ? "OFF" : "ON");
+  jsonAdd(msg, sizeof(msg), "\"rssi\":%d,\"uptime_s\":%lu,\"version\":\"%s\"}", (int)WiFi.RSSI(),
+          (unsigned long)(now / 1000), FIRMWARE_VERSION);
+  return mqtt.publish(topic, msg, true);
+}
+
+// Once per 250 ms window: keeps the broker connection up and sends at most one
+// message, so sampling resumes quickly. A broker that's down costs one short
+// connection attempt every MQTT_RETRY_MS.
+void serviceMqtt(uint32_t now) {
+  if (!net.mqttHost[0]) {
+    if (mqtt.connected()) mqtt.disconnect();
+    return;
+  }
+  if (WiFi.status() != WL_CONNECTED) return;
+  if (!mqtt.connected()) {
+    if (lastMqttAttemptMs && now - lastMqttAttemptMs < MQTT_RETRY_MS) return;
+    lastMqttAttemptMs = now ? now : 1;
+    char clientId[40], will[64];
+    snprintf(clientId, sizeof(clientId), "sm2k-%s", DEVICE_NAME);
+    snprintf(will, sizeof(will), "%s/status", mqttBase);
+    mqtt.setServer(net.mqttHost, net.mqttPort);
+    bool ok = mqtt.connect(clientId, net.mqttUser[0] ? net.mqttUser : nullptr, net.mqttUser[0] ? net.mqttPass : nullptr,
+                           will, 0, true, "offline");
+    if (!ok) {
+      if (!mqttFailLogged) logf("[mqtt] can't connect to %s:%u: %s (state %d); retrying every %lu s", net.mqttHost,
+                                (unsigned)net.mqttPort, mqttProblem(), mqtt.state(), (unsigned long)(MQTT_RETRY_MS / 1000));
+      mqttFailLogged = true;
+      return;
+    }
+    mqttFailLogged = false;
+    logf("[mqtt] connected to %s:%u", net.mqttHost, (unsigned)net.mqttPort);
+    mqtt.publish(will, "online", true);
+    mqttDiscoveryIdx = 0;
+    mqttDirty = true;
+    return;
+  }
+  mqtt.loop();
+  if (mqttDiscoveryIdx >= 0) {
+    if (!publishHaDiscovery(HA_ENTITIES[mqttDiscoveryIdx])) logf("[mqtt] discovery for %s not sent", HA_ENTITIES[mqttDiscoveryIdx].id);
+    if (++mqttDiscoveryIdx >= HA_ENTITY_COUNT) mqttDiscoveryIdx = -1;
+    return;
+  }
+  if (mqttDirty || now - lastMqttStateMs >= MQTT_STATE_MS) {
+    if (publishMqttState(now)) mqttDirty = false;
+    lastMqttStateMs = now;
+  }
+}
+
+// POST /connections (the connections form on the page). An empty Telegraf URL
+// or MQTT host turns that output off. Secret fields left empty keep their
+// saved value.
+void handleWebConnections() {
+  if (!webAuthorized()) return;
+  NetConfig c = net;
+  String tg = web.arg("tg_url"), topic = web.arg("ntfy"), host = web.arg("mqtt_host"), user = web.arg("mqtt_user"),
+         pass = web.arg("mqtt_pass"), admin = web.arg("admin"), port = web.arg("mqtt_port");
+  tg.trim(); topic.trim(); host.trim(); user.trim();
+  if (tg.length() >= sizeof(c.telegrafUrl) || !plainText(tg.c_str()) || (tg.length() && !tg.startsWith("http://")))
+    return sendSettingsError("The Telegraf address must start with http:// (or be empty to turn it off).");
+  if (topic.length() >= sizeof(c.ntfyTopic) || !plainText(topic.c_str()) || topic.indexOf('/') >= 0)
+    return sendSettingsError("The ntfy topic can only contain letters, digits, - and _.");
+  if (host.length() >= sizeof(c.mqttHost) || !plainText(host.c_str()) || host.indexOf('/') >= 0 || host.indexOf(':') >= 0)
+    return sendSettingsError("The MQTT broker must be a host name or IP address only (no mqtt:// and no port).");
+  long p = port.length() ? port.toInt() : 1883;
+  if (p < 1 || p > 65535) return sendSettingsError("The MQTT port must be between 1 and 65535.");
+  if (user.length() >= sizeof(c.mqttUser) || !plainText(user.c_str())) return sendSettingsError("The MQTT user name is too long or has unusual characters.");
+  if (pass.length() >= sizeof(c.mqttPass) || !plainText(pass.c_str())) return sendSettingsError("The MQTT password is too long or has spaces, quotes or a backslash.");
+  if (admin.length() && (admin.length() < 8 || admin.length() >= sizeof(c.adminPass) || !plainText(admin.c_str())))
+    return sendSettingsError("A new admin password must be 8 to 32 characters, with no spaces, quotes or backslash.");
+
+  snprintf(c.telegrafUrl, sizeof(c.telegrafUrl), "%s", tg.c_str());
+  if (web.hasArg("ntfy_off")) c.ntfyTopic[0] = 0;
+  else if (topic.length()) snprintf(c.ntfyTopic, sizeof(c.ntfyTopic), "%s", topic.c_str());
+  snprintf(c.mqttHost, sizeof(c.mqttHost), "%s", host.c_str());
+  c.mqttPort = (uint16_t)p;
+  snprintf(c.mqttUser, sizeof(c.mqttUser), "%s", user.c_str());
+  if (!user.length()) c.mqttPass[0] = 0;
+  else if (pass.length()) snprintf(c.mqttPass, sizeof(c.mqttPass), "%s", pass.c_str());
+  if (admin.length()) snprintf(c.adminPass, sizeof(c.adminPass), "%s", admin.c_str());
+
+  bool mqttChanged = strcmp(c.mqttHost, net.mqttHost) || c.mqttPort != net.mqttPort || strcmp(c.mqttUser, net.mqttUser) ||
+                     strcmp(c.mqttPass, net.mqttPass);
+  bool adminChanged = strcmp(c.adminPass, net.adminPass) != 0;
+  net = c;
+  saveNetConfig();
+  if (mqttChanged) {
+    mqtt.disconnect();
+    lastMqttAttemptMs = 0;
+    mqttFailLogged = false;
+  }
+  if (!net.telegrafUrl[0]) tgCount = 0;
+  if (!net.ntfyTopic[0]) ntfyCount = 0;
+  logf("[net] connections changed: Telegraf %s; ntfy %s; MQTT %s%s%s", net.telegrafUrl[0] ? net.telegrafUrl : "off",
+       net.ntfyTopic[0] ? "on" : "off", net.mqttHost[0] ? net.mqttHost : "off", net.mqttUser[0] ? " (with login)" : "",
+       adminChanged ? "; admin password changed" : "");
+  web.sendHeader("Location", "/?conn=1");
+  web.send(303, "text/plain", "");
+}
+
 void setupWeb() {
   web.enableDelay(false);  // handleClient() must return at once when nobody is connected
   web.on("/", HTTP_GET, []() { web.send_P(200, "text/html; charset=utf-8", WEB_PAGE); });
   web.on("/api/status", HTTP_GET, handleWebStatus);
   web.on("/api/log", HTTP_GET, handleWebLog);
   web.on("/settings", HTTP_POST, handleWebSettings);
+  web.on("/connections", HTTP_POST, handleWebConnections);
   web.onNotFound([]() { web.send(404, "text/plain", "Not found"); });
   web.begin();
   MDNS.addService("http", "tcp", 80);
@@ -1865,6 +2168,7 @@ void setup(void) {
   lastRecordedState = prefs.getInt("last_state", -1);
   prefs.end();
   loadSettings();
+  loadNetConfig();
 
   checkUnexpectedReset();
   checkOtaState();
@@ -1877,6 +2181,7 @@ void setup(void) {
   checkBootEpoch();
   setupOta();
   setupWeb();
+  setupMqtt();
   reportBoot();
   setupSensor();
   ahtReady = aht.begin();
@@ -1956,6 +2261,7 @@ void loop(void) {
   serviceNetwork(now);
   serviceOta();
   serviceWeb();
+  serviceMqtt(now);
   checkWiFiWatchdog();
   checkSensorWatchdog(now);
   checkLevelWatchdogs(now);

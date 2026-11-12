@@ -6,6 +6,27 @@ to `FIRMWARE_VERSION` in `src/sm2k.ino`.
 Sump Master 2000 is a fork of the vibration-monitor project, taken at
 `2026-09-22r1`. Entries below that point are the original project's history.
 
+## 2026-11-11r4
+
+- **Home Assistant over MQTT.** With an MQTT broker set, the board publishes
+  its state to `sm2k/<device>/state` (retained JSON, every 30 s and at once on
+  a pump or high-water change), `online`/`offline` to `sm2k/<device>/status`
+  (last will), and Home Assistant MQTT Discovery messages for 13 entities under
+  one device: pump, high water, water depth, air temperature, humidity,
+  vibration, last pump run, pump cycles, level-sensor and pump-sensor problem,
+  Wi-Fi signal, uptime and firmware. One message per 250 ms window; a broker
+  that's down costs one short connection attempt every 30 s. PubSubClient.
+- **Connections changeable on the web page** (new "Connections" form, saved in
+  NVS as `n_*`): Telegraf address, ntfy topic, MQTT broker/port/user/password
+  and the admin password. An empty Telegraf address or MQTT broker turns that
+  output off, and ntfy has an off box, so InfluxDB, ntfy and MQTT are each
+  optional. Changes apply at once, with no restart. The ntfy topic and the
+  passwords are never sent back to the browser.
+- `secrets.h` is now optional and only supplies starting values (Wi-Fi,
+  Telegraf, ntfy, MQTT). The admin password for the web page starts as the OTA
+  password and can be changed; OTA uploads still use the build-time password.
+- Not yet: setting Wi-Fi itself from the page / a setup hotspot (next step).
+
 ## 2026-11-11r3
 
 - Web page: the HIGH WATER badge stayed visible after the alarm cleared (its

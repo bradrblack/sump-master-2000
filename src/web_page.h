@@ -24,6 +24,7 @@ table{border-collapse:collapse;width:100%}td{padding:3px 0;font-variant-numeric:
 form{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
 label{display:block;font-size:13px;color:var(--dim)}
 input{width:100%;padding:8px;margin-top:3px;font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:6px}
+input[type=checkbox]{width:auto;margin:0 6px 0 0}.chk{align-self:end;padding-bottom:9px}
 .btns{grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap}
 button{padding:9px 16px;font:inherit;font-weight:600;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
 button.go{background:var(--run);border-color:var(--run);color:#fff}
@@ -55,13 +56,26 @@ pre{margin:0;max-height:260px;overflow:auto;font:12px/1.35 ui-monospace,Menlo,mo
 <label>A run should lower the water by (cm)<input name="drop" inputmode="decimal" required></label>
 <div class="btns"><button class="go" type="submit">Save</button>
 <button type="submit" name="reset" value="1" formnovalidate onclick="return confirm('Put every setting back to the firmware default?')">Reset to defaults</button></div>
-</form><p class="note">Saving asks for a user name and password: <b>admin</b> and the OTA password. Settings are kept on the board and survive restarts and updates.</p></div>
+</form><p class="note">Saving asks for a user name and password: <b>admin</b> and the admin password (the OTA password, unless you have changed it below). Settings are kept on the board and survive restarts and updates.</p></div>
+<div class="card"><h2>Connections</h2><div id="csaved"></div><p class="sub" id="cstat">&nbsp;</p>
+<form method="post" action="/connections">
+<label>Telegraf address (empty turns it off)<input name="tg_url" placeholder="http://server:8186/sump" autocapitalize="off"></label>
+<label>ntfy topic<input name="ntfy" autocomplete="off" autocapitalize="off"></label>
+<label class="chk"><input type="checkbox" name="ntfy_off" value="1">Turn ntfy pushes off</label>
+<label>MQTT broker for Home Assistant (empty turns it off)<input name="mqtt_host" placeholder="192.168.1.10" autocapitalize="off"></label>
+<label>MQTT port<input name="mqtt_port" inputmode="numeric"></label>
+<label>MQTT user name (empty if the broker needs none)<input name="mqtt_user" autocomplete="off" autocapitalize="off"></label>
+<label>MQTT password<input name="mqtt_pass" type="password" autocomplete="new-password"></label>
+<label>New admin password<input name="admin" type="password" autocomplete="new-password" placeholder="leave empty to keep the current one"></label>
+<div class="btns"><button class="go" type="submit">Save connections</button></div>
+</form><p class="note">The ntfy topic and the passwords are never shown here; leave those boxes empty to keep what is saved. Changes take effect at once, with no restart.</p></div>
 <div class="card"><h2>Log</h2><pre id="log"></pre></div>
 </main><script>
 const $=id=>document.getElementById(id),f=(v,d)=>v==null?'–':v.toFixed(d);
 let hist=[],cfg=null,seq=0,filled=false;
 const q=new URLSearchParams(location.search);
 if(q.has('saved'))$('saved').innerHTML='<p class="msg">Settings saved.</p>';
+if(q.has('conn'))$('csaved').innerHTML='<p class="msg">Connections saved.</p>';
 if(q.has('reset'))$('saved').innerHTML='<p class="msg">Settings reset to the firmware defaults.</p>';
 function draw(){const c=$('chart'),r=devicePixelRatio||1,w=c.clientWidth,h=c.clientHeight;c.width=w*r;c.height=h*r;
 const g=c.getContext('2d');g.scale(r,r);const cs=getComputedStyle(document.documentElement),col=n=>cs.getPropertyValue(n);
@@ -88,7 +102,10 @@ $('sugg').textContent=s.last_run.min>2*a?'start '+(a+.6*d).toFixed(2)+' · stop 
 else $('sugg').textContent='needs one pump run';
 hist.push(s.rms_max);if(hist.length>150)hist.shift();draw();
 if(!filled){filled=true;const F=document.forms[0],c=s.cfg;F.on.value=c.on;F.off.value=c.off;F.run_s.value=c.run_ms/1000;F.stop_s.value=c.stop_ms/1000;
-F.floor.value=c.floor_cm;F.high.value=c.high_cm;F.hyst.value=c.hyst_cm;F.drop.value=c.drop_cm;}
+F.floor.value=c.floor_cm;F.high.value=c.high_cm;F.hyst.value=c.hyst_cm;F.drop.value=c.drop_cm;
+const G=document.forms[1],n=s.conn;G.tg_url.value=n.tg_url;G.mqtt_host.value=n.mqtt_host;G.mqtt_port.value=n.mqtt_port;G.mqtt_user.value=n.mqtt_user;
+G.ntfy.placeholder=n.ntfy?'set; leave empty to keep it':'not set';G.mqtt_pass.placeholder=n.mqtt_pass?'set; leave empty to keep it':'not set';}
+$('cstat').textContent='Wi-Fi "'+s.conn.wifi+'" · Telegraf '+(s.conn.tg_url?'on':'off')+' · ntfy '+(s.conn.ntfy?'on':'off')+' · Home Assistant (MQTT) '+s.conn.mqtt;
 }catch(e){$('sub').textContent='not responding…';}}
 async function log(){try{const t=await(await fetch('/api/log?since='+seq)).text(),i=t.indexOf('\n');seq=+t.slice(0,i);
 const body=t.slice(i+1);if(body){const p=$('log'),end=p.scrollTop+p.clientHeight>=p.scrollHeight-8;p.textContent+=body;if(end)p.scrollTop=p.scrollHeight;}}catch(e){}}

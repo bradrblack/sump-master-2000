@@ -4,7 +4,7 @@ Design plan and decisions for the Sump Master 2000. Last updated 2026-11-08.
 
 ## Status
 
-- **Firmware:** `2026-11-11r3` (see [CHANGELOG.md](CHANGELOG.md)). All three
+- **Firmware:** `2026-11-11r4` (see [CHANGELOG.md](CHANGELOG.md)). All three
   sensors, the high-water alarm, ntfy pushes, the nightly reboot and the
   NeoPixel status LED have run on the bench, and OTA updates with the sensors
   attached work. The board serves a web page for watching it and changing the
@@ -159,6 +159,22 @@ partitions.
   running average/lowest, thresholds), so calibration can be checked over days
   in Grafana.
 - Not exposed to the internet. Remote access would need a VPN.
+- **Connections in NVS too:** Telegraf address, ntfy topic, MQTT broker and
+  login, admin password. `secrets.h` is optional and only gives starting values.
+  Still to do: Wi-Fi itself. Agreed rule (2026-11-11): a setup hotspot opens
+  only when the board has no Wi-Fi details at all, or on a deliberate request
+  (a "forget Wi-Fi" button, or BOOT held at power-up); never just because Wi-Fi
+  is down. Pump detection, level and LED keep running during setup. Our own
+  small page on the existing web server, not the WiFiManager library (it
+  blocks the loop).
+
+### Home Assistant (MQTT)
+
+- Optional output beside InfluxDB and ntfy: MQTT with Home Assistant MQTT
+  Discovery, one device, 13 entities, retained state JSON, last will for
+  availability. PubSubClient; one message per 250 ms window.
+- Rejected: an ESPHome rewrite (loses the pump detection, OTA rollback and
+  watchdogs), Home Assistant's REST API (no discovery), webhooks.
 
 ### Notifications (ntfy)
 
