@@ -2,7 +2,7 @@
 //
 // Style follows the fan dongle case (github.com/bradrblack/rf-ceiling-fan-remote,
 // hw/case/fan_dongle_case.scad): no screws through the carrier, printed pins
-// through its holes, hook posts from the lid that clamp it, snap ridges, USB-C
+// through its holes, hook posts from the lid that clamp it, detent clicks, USB-C
 // held in the end wall. Differences: the AJ-SR04M ultrasonic board is screwed
 // under the lid at the far end with its probe socket through a slot, and the
 // tray has strap slots low in its side walls so the case can be cable-tied to
@@ -13,9 +13,18 @@
 // Closure (as on the fan dongle case): the tray's walls run the full height and
 // the lid is a flat ceiling with two 2 mm skirts that slide down inside the long
 // walls, plus an end wall that drops onto the tray's low stub wall at the USB
-// end. Snap tabs in the skirts click over ridges on the tray walls. (An earlier
-// "lip" closure, with a thin lip under half-height lid walls, was removed
-// 2026-11-11: the lip was not attached to the lid and did not print.)
+// end. The skirts are one piece with the ceiling and run unbroken along the
+// case: no slits, no free tabs. At three places per side the skirt is thinned
+// to 1 mm from the inside (a pocket framed by the full 2 mm skirt, as on the fan
+// dongle case), and a rounded bump on the outside of each pocket, near the
+// skirt's lower edge, clicks into a matching rounded seat in the tray wall.
+// Closing, the bump rides down the tray wall with the pocket flexed 0.4 mm and
+// drops into its seat; closed, nothing is under load (0.1 mm clearance), so the
+// fit doesn't creep loose. The 35 deg flanks let a firm pull open it again.
+// (History: a separate "lip" was removed 2026-11-11 because it was not attached
+// to the lid; slit snap tabs with windows were removed 2026-11-12 because they
+// were fragile; a plain friction fit, wedge ridges pressing on the skirt, was
+// replaced the same day by this detent.)
 //
 // Render:
 //   openscad -o tray.stl -D 'part="tray"' sump_case.scad
@@ -29,19 +38,24 @@
 part = "both";
 $fn = 40;
 
-// ---------------- lid skirts and snaps ----------------
+// ---------------- lid skirts and detents ----------------
+// Pockets as on the fan dongle case (8 mm wide, 1 mm thick); each carries a
+// rounded detent bump that clicks into a seat in the tray wall.
 skirt_t    = 2;      // skirt thickness
 skirt_gap  = 0.2;    // skirt to the tray wall
-skirt_z0   = 9;      // skirt's lower edge above the floor (tabs are 15 mm long)
-tab_w      = 10;     // snap tab width
-tab_t      = 1;      // tab thickness (the skirt is thinned from the inside)
-tab_slit   = 1;      // slit either side of a tab, so it flexes on its own
-ridge_p    = 0.7;    // ridge height off the tray wall (0.5 mm into the tab's window)
-ridge_w    = 5.6;
-ridge_z0   = 14;     // ridge's lower edge above the floor
-ridge_h    = ridge_p + 0.6 + 2.4;   // 45 deg underside, short flat, long ramp on top
-win_w      = ridge_w + 0.8;         // window in the tab that the ridge clicks into
-skirt_snap_x = [18, 48, 98];        // clear of the AHT20 vents (56-71)
+skirt_z0   = 9;      // skirt's lower edge above the floor
+pad_w      = 8;      // thinned pocket width (fan case: snap_tab_w)
+pad_t      = 1;      // skirt thickness left at the pocket (fan case: snap_tab_thickness)
+detent     = 0.4;    // TUNE: how far the bump reaches past the tray wall's face (= the click's overlap)
+detent_clr = 0.1;    // seat clearance around the bump when closed (no preload)
+bump_p     = skirt_gap + detent;   // bump height off the skirt's outer face
+bump_ang   = 35;     // flank angle from the wall: lower = easier on and off
+bump_flat  = 0.4;    // crest length (rounded)
+bump_round = 0.2;    // crest rounding radius
+bump_w     = pad_w - 2;            // along the case, on the flexible pocket only
+bump_zc    = skirt_z0 + 1.6;       // bump centre, near the skirt's free lower edge
+seat_w     = bump_w + 1;
+skirt_snap_x = [18, 48, 98];       // clear of the AHT20 vents (56-71)
 
 // ---------------- case shell ----------------
 wall      = 2;
@@ -206,9 +220,10 @@ module tray() {
       translate([wall + x, -1, floor_t + 4]) cube([vent_w, out_w + 2, 7]);
     // strap slots through both side walls, at floor level
     for (x = strap_x) translate([wall + x - strap_slot_w / 2, -1, floor_t]) cube([strap_slot_w, out_w + 2, strap_slot_h]);
+    // rounded seats that the lid skirts' detent bumps click into
+    at_inner() for (x = skirt_snap_x, side = [0, 1]) detent_seat(x, side);
   }
-  // ridges on the long walls that the lid's tabs click over
-  at_inner() for (x = skirt_snap_x, side = [0, 1]) snap_ridge(x, side);
+  // (detent seats are cut into the long walls in the difference above)
   // standoffs + pins
   at_inner() for (h = holes) {
     p = bxy(h);
@@ -221,31 +236,45 @@ module tray() {
   }
 }
 
-// A snap ridge on a long wall's inner face, in cavity coordinates. The lid's tab
-// rides down the long ramp on top; the 45 deg underside holds it but lets a firm
-// pull open the case (and prints without support).
-module snap_ridge(x, side) {
-  pts = [[-0.1, ridge_z0], [0, ridge_z0], [ridge_p, ridge_z0 + ridge_p], [ridge_p, ridge_z0 + ridge_p + 0.6], [0, ridge_z0 + ridge_h], [-0.1, ridge_z0 + ridge_h]];   // 0.1 into the wall: one solid
-  translate([x - ridge_w / 2, 0, 0]) rotate([90, 0, 90]) linear_extrude(ridge_w)
-    polygon([for (q = pts) [side ? in_w - q[0] : q[0], q[1]]]);
+// Detent bump profile, in the plane across a long wall: q = distance from the
+// skirt's outer face toward the tray wall, z = height. Trapezoid with bump_ang
+// flanks and a flat crest, its convex corners rounded. grow > 0 makes the seat.
+module bump_profile(grow = 0) {
+  run = bump_p / tan(bump_ang);
+  offset(delta = grow) offset(r = bump_round) offset(delta = -bump_round)
+    polygon([[-0.4, bump_zc - bump_flat / 2 - run - 0.4], [0, bump_zc - bump_flat / 2 - run],
+             [bump_p, bump_zc - bump_flat / 2], [bump_p, bump_zc + bump_flat / 2],
+             [0, bump_zc + bump_flat / 2 + run], [-0.4, bump_zc + bump_flat / 2 + run + 0.4]]);   // base sunk into the skirt: one solid
 }
+// Place a q-z profile on one long side, extruded w along the case, in cavity coordinates.
+module on_side(x, side, w) {
+  translate([x - w / 2, 0, 0]) rotate([90, 0, 90]) linear_extrude(w)
+    if (side) translate([in_w - skirt_gap, 0]) children(); else translate([skirt_gap, 0]) mirror([1, 0]) children();
+}
+module detent_bump(x, side) on_side(x, side, bump_w) intersection() {
+  bump_profile();
+  translate([-0.3, 0]) square([10, 100]);   // keep the base inside the 1 mm pocket skin
+}
+module detent_seat(x, side) on_side(x, side, seat_w) bump_profile(detent_clr);
 
-// One lid skirt, in cavity coordinates: a 2 mm wall hanging from the
-// ceiling just inside a long tray wall. At each snap position it is thinned to a
-// 1 mm tab with a slit either side and a window for the tray's ridge.
+// One lid skirt, in cavity coordinates: a 2 mm wall hanging from the ceiling
+// just inside a long tray wall, unbroken along its length. At each detent it is
+// thinned from the inside to a 1 mm pocket (open at the bottom edge, as on the
+// fan case) so it flexes as the bump rides over the tray wall; the outside face is
+// flat apart from the bump, and the full-thickness skirt frames the pocket on both
+// sides and at the ceiling, so there is nothing free-standing to snap off.
+// A rounded detent bump sits on the pocket's outer face near the lower edge.
 module skirt(side) {
   y0 = side ? in_w - skirt_gap - skirt_t : skirt_gap;
   difference() {
     translate([1, y0, skirt_z0]) cube([in_l - 1.4, skirt_t, in_h - skirt_z0 + 0.01]);
-    for (x = skirt_snap_x) {
-      // thin the tab from the inside
-      translate([x - tab_w / 2, side ? y0 - 1 : y0 + tab_t, skirt_z0 - 1]) cube([tab_w, skirt_t - tab_t + 1, in_h - skirt_z0 + 1]);
-      // slits
-      for (sx = [-tab_w / 2 - tab_slit, tab_w / 2])
-        translate([x + sx, y0 - 1, skirt_z0 - 1]) cube([tab_slit, skirt_t + 2, in_h - skirt_z0 + 1]);
-      // window
-      translate([x - win_w / 2, y0 - 1, ridge_z0 - 0.3]) cube([win_w, skirt_t + 2, ridge_h + 0.6]);
-    }
+    for (x = skirt_snap_x)
+      translate([x - pad_w / 2, side ? y0 - 1 : y0 + pad_t, skirt_z0 - 1])
+        cube([pad_w, skirt_t - pad_t + 1, in_h - skirt_z0 + 1]);
+  }
+  for (x = skirt_snap_x) intersection() {
+    detent_bump(x, side);
+    translate([0, -5, skirt_z0]) cube([in_l, in_w + 10, in_h]);   // nothing below the skirt's edge
   }
 }
 
@@ -422,6 +451,6 @@ module tie_dummies() {
 if (part == "none") { }
 else if (part == "tray") tray();
 else if (part == "lid") translate([0, out_w, floor_t + in_h + lid_t]) rotate([180, 0, 0]) lid();
-else if (part == "clash") intersection() { tray(); lid(); }   // must be empty
+else if (part == "clash") intersection() { tray(); lid(); }   // must be empty (the detents have clearance when closed)
 else if (part == "section") intersection() { union() { tray(); lid(); dummies(); } translate([-5, wall + in_w / 2, -10]) cube([200, 50, 60]); }
 else { tray(); color("white", 0.35) lid(); dummies(); tie_dummies(); color("lightgray", 0.5) pipe_dummy(); }
