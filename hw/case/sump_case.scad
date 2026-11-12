@@ -13,9 +13,14 @@
 // Closure (as on the fan dongle case): the tray's walls run the full height and
 // the lid is a flat ceiling with two 2 mm skirts that slide down inside the long
 // walls, plus an end wall that drops onto the tray's low stub wall at the USB
-// end. Snap tabs in the skirts click over ridges on the tray walls. (An earlier
-// "lip" closure, with a thin lip under half-height lid walls, was removed
-// 2026-11-11: the lip was not attached to the lid and did not print.)
+// end. The skirts are one piece with the ceiling and run unbroken along the
+// case: no slits, no free tabs. At three places per side the skirt is thinned
+// to 1 mm from the inside (a shallow pocket framed by the full 2 mm skirt on
+// three sides), and a low wedge ridge on the tray wall presses on the outside
+// of that pocket, so the lid is held by friction, exactly as on the fan dongle
+// case. (History: a separate "lip" was removed 2026-11-11 because it was not
+// attached to the lid; slit snap tabs with windows were removed 2026-11-12
+// because the tabs were thin and fragile.)
 //
 // Render:
 //   openscad -o tray.stl -D 'part="tray"' sump_case.scad
@@ -29,19 +34,21 @@
 part = "both";
 $fn = 40;
 
-// ---------------- lid skirts and snaps ----------------
+// ---------------- lid skirts and friction fit ----------------
+// Same numbers as the fan dongle case's closure: 8 mm wide, 1 mm thick pockets
+// in the skirt, wedge ridges 2 mm wider than the pocket, 0.3 mm interference.
 skirt_t    = 2;      // skirt thickness
 skirt_gap  = 0.2;    // skirt to the tray wall
-skirt_z0   = 9;      // skirt's lower edge above the floor (tabs are 15 mm long)
-tab_w      = 10;     // snap tab width
-tab_t      = 1;      // tab thickness (the skirt is thinned from the inside)
-tab_slit   = 1;      // slit either side of a tab, so it flexes on its own
-ridge_p    = 0.7;    // ridge height off the tray wall (0.5 mm into the tab's window)
-ridge_w    = 5.6;
-ridge_z0   = 14;     // ridge's lower edge above the floor
-ridge_h    = ridge_p + 0.6 + 2.4;   // 45 deg underside, short flat, long ramp on top
-win_w      = ridge_w + 0.8;         // window in the tab that the ridge clicks into
-skirt_snap_x = [18, 48, 98];        // clear of the AHT20 vents (56-71)
+skirt_z0   = 9;      // skirt's lower edge above the floor
+pad_w      = 8;      // thinned pocket width (fan case: snap_tab_w)
+pad_t      = 1;      // skirt thickness left at the pocket (fan case: snap_tab_thickness)
+fit_interf = 0.3;    // how far each ridge pushes into the skirt (fan case: 0.6 ridge - 0.3 gap)
+ridge_p    = skirt_gap + fit_interf;   // ridge height off the tray wall
+ridge_w    = pad_w + 2;                // as on the fan case, the ridge overlaps the pocket's frame by 1 mm each side
+ridge_ramp = 3;      // long lead-in ramp on top (fan case: snap_engage_h)
+ridge_z0   = 15;     // ridge's lower edge above the floor: centred on the skirt (9-24), as on the fan case
+ridge_h    = ridge_p + ridge_ramp;     // 45 deg underside, then the ramp up to flush
+skirt_snap_x = [18, 48, 98];           // clear of the AHT20 vents (56-71)
 
 // ---------------- case shell ----------------
 wall      = 2;
@@ -221,31 +228,29 @@ module tray() {
   }
 }
 
-// A snap ridge on a long wall's inner face, in cavity coordinates. The lid's tab
-// rides down the long ramp on top; the 45 deg underside holds it but lets a firm
-// pull open the case (and prints without support).
+// A friction ridge on a long wall's inner face, in cavity coordinates. The lid's
+// skirt rides down the long ramp on top and stays pressed against the apex once
+// closed (the skirt's lower edge ends 6 mm below the ridge), so the ridge never
+// has to snap past anything. The 45 deg underside prints without support.
 module snap_ridge(x, side) {
-  pts = [[-0.1, ridge_z0], [0, ridge_z0], [ridge_p, ridge_z0 + ridge_p], [ridge_p, ridge_z0 + ridge_p + 0.6], [0, ridge_z0 + ridge_h], [-0.1, ridge_z0 + ridge_h]];   // 0.1 into the wall: one solid
+  pts = [[-0.1, ridge_z0], [0, ridge_z0], [ridge_p, ridge_z0 + ridge_p], [0, ridge_z0 + ridge_h], [-0.1, ridge_z0 + ridge_h]];   // 0.1 into the wall: one solid
   translate([x - ridge_w / 2, 0, 0]) rotate([90, 0, 90]) linear_extrude(ridge_w)
     polygon([for (q = pts) [side ? in_w - q[0] : q[0], q[1]]]);
 }
 
-// One lid skirt, in cavity coordinates: a 2 mm wall hanging from the
-// ceiling just inside a long tray wall. At each snap position it is thinned to a
-// 1 mm tab with a slit either side and a window for the tray's ridge.
+// One lid skirt, in cavity coordinates: a 2 mm wall hanging from the ceiling
+// just inside a long tray wall, unbroken along its length. At each ridge it is
+// thinned from the inside to a 1 mm pocket (open at the bottom edge, as on the
+// fan case) so it gives a little where the ridge presses; the outside face stays
+// flat and continuous, and the full-thickness skirt frames the pocket on both
+// sides and at the ceiling, so there is nothing free-standing to snap off.
 module skirt(side) {
   y0 = side ? in_w - skirt_gap - skirt_t : skirt_gap;
   difference() {
     translate([1, y0, skirt_z0]) cube([in_l - 1.4, skirt_t, in_h - skirt_z0 + 0.01]);
-    for (x = skirt_snap_x) {
-      // thin the tab from the inside
-      translate([x - tab_w / 2, side ? y0 - 1 : y0 + tab_t, skirt_z0 - 1]) cube([tab_w, skirt_t - tab_t + 1, in_h - skirt_z0 + 1]);
-      // slits
-      for (sx = [-tab_w / 2 - tab_slit, tab_w / 2])
-        translate([x + sx, y0 - 1, skirt_z0 - 1]) cube([tab_slit, skirt_t + 2, in_h - skirt_z0 + 1]);
-      // window
-      translate([x - win_w / 2, y0 - 1, ridge_z0 - 0.3]) cube([win_w, skirt_t + 2, ridge_h + 0.6]);
-    }
+    for (x = skirt_snap_x)
+      translate([x - pad_w / 2, side ? y0 - 1 : y0 + pad_t, skirt_z0 - 1])
+        cube([pad_w, skirt_t - pad_t + 1, in_h - skirt_z0 + 1]);
   }
 }
 
@@ -422,6 +427,6 @@ module tie_dummies() {
 if (part == "none") { }
 else if (part == "tray") tray();
 else if (part == "lid") translate([0, out_w, floor_t + in_h + lid_t]) rotate([180, 0, 0]) lid();
-else if (part == "clash") intersection() { tray(); lid(); }   // must be empty
+else if (part == "clash") intersection() { tray(); lid(); }   // only the six 0.3 mm ridge-on-skirt friction overlaps
 else if (part == "section") intersection() { union() { tray(); lid(); dummies(); } translate([-5, wall + in_w / 2, -10]) cube([200, 50, 60]); }
 else { tray(); color("white", 0.35) lid(); dummies(); tie_dummies(); color("lightgray", 0.5) pipe_dummy(); }
