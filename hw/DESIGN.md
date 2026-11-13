@@ -21,7 +21,7 @@ Replace the CC1101 with the sensor sockets below.
 | Part | Notes |
 |---|---|
 | ESP32-C3 SuperMini, "v2" with external antenna | 16 through-hole pads, 2.54 mm pitch, rows 15.24 mm apart (footprint `ESP32-C3_SuperMini_FaceUp`). USB-C on the board edge. Antenna stays inside the case. 3.3 V rail comes from this board. |
-| GY-346 accelerometer module (ADXL346, I2C 0x53) | 8-pin header: VIN, GND, SCL, SDA, SDO, CS, INT2, INT1. Lies flat in a female header. Size and pin-row length still to be measured. |
+| GY-346 accelerometer module (ADXL346, I2C 0x53) | 8-pin header: VIN, GND, SCL, SDA, SDO, CS, INT2, INT1. Lies flat on its own soldered header. Board 14 x 21 mm, header along a 21 mm side (user-measured 2026-11-13). |
 | AHT20 + BMP280 module (AHT20 at 0x38; BMP280 unused) | 4-pin I2C header, presumably VIN, GND, SCL, SDA (verify). Lies flat in a female header. |
 | AJ-SR04M ultrasonic control board (JSN-SR04T-style) | See section 4. Mounted to the lid, not the PCB. |
 | 470 uF electrolytic caps | One by each module header, one at the ESP32, one at the SR04 lead header (4 total minimum). **They were the likely fix for I2C failures on the bench.** |
@@ -173,7 +173,7 @@ notch in the end wall, pins through the holes); with the lid upside down, push t
 the SR04's pins; press the lid on (its skirts slide inside the tray's long walls until the tabs click; its end wall completes the USB opening).
 
 **Measured by the user (2026-11-08):** caps 7 mm dia x 12 mm tall (footprint now D7.5 P2.5, assumed
-2.5 mm leads); GY-346 20 x 9 mm, orientation confirmed; AHT20 15 x 15 mm, its board 2.5 mm above the
+2.5 mm leads); GY-346 20 x 9 mm (superseded 2026-11-13: re-measured **14 x 21 mm**, header along the 21 mm side), orientation confirmed; AHT20 15 x 15 mm, its board 2.5 mm above the
 carrier (soldered on its own header, lying flat away from J2 toward the far end; J3 moved to x 72.8 to clear
 it); SuperMini USB-C bottom flush with the module PCB top (as modelled); RESET 9 mm from the USB end and
 5 mm from the right side with the USB port up (tunnel at board (9.0, 8.0)).
