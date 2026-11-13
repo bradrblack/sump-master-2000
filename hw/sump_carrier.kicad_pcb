@@ -5361,8 +5361,8 @@
 		(uuid "67b5b572-b344-4858-ba89-3eadf399d6bc")
 	)
 	(gr_rect
-		(start 126.8 101.75)
-		(end 142.3 122.25)
+		(start 126.83 101.5)
+		(end 140.83 122.5)
 		(stroke
 			(width 0.1)
 			(type default)
@@ -5372,8 +5372,8 @@
 		(uuid "75996455-5f6c-424d-8844-c9a639437234")
 	)
 	(gr_rect
-		(start 155.9 106)
-		(end 167.9 118)
+		(start 155.93 104.5)
+		(end 170.93 119.5)
 		(stroke
 			(width 0.1)
 			(type default)
@@ -5642,8 +5642,8 @@
 			)
 		)
 	)
-	(gr_text "GY-346 (placeholder 15.5x20.5)"
-		(at 134.55 102.75 0)
+	(gr_text "GY-346 14x21"
+		(at 133.83 102.5 0)
 		(layer "F.Fab")
 		(uuid "bcd336bd-bbe3-4663-9670-290e93098af0")
 		(effects
@@ -5653,8 +5653,8 @@
 			)
 		)
 	)
-	(gr_text "AHT20 (placeholder 12x12)"
-		(at 161.9 107 0)
+	(gr_text "AHT20 15x15"
+		(at 163.43 105.5 0)
 		(layer "F.Fab")
 		(uuid "32f81b81-e897-46c4-82fd-99e7e689c03d")
 		(effects

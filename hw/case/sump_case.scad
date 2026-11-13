@@ -178,7 +178,7 @@ jst_slot = [8.5, 6.6];      // socket 7 x 4.5 + clearance; the plug must also pa
 aht_x = [pcb_x0 + 55.9, pcb_x0 + 70.9];   // AHT20 board span: 15 x 15, lying flat away from J2 (user-measured)
 aht_z = 2.5;                               // carrier top to the AHT20 board's underside (user-measured)
 cap_d = 7; cap_h = 12;                     // 470 uF caps (user-measured), 2.5 mm lead pitch
-gy_w = 9; gy_l = 20;                       // GY-346 (user-measured), lying flat from J1 toward the caps
+gy_w = 14; gy_l = 21;                      // GY-346 (user-measured 2026-11-13: 21 along the header, 14 across), lying flat from J1 toward the caps
 gy_z = 2.5;                                // soldered on its own header like the AHT20 (user, after bench testing)
 vent_w = 1.6; vent_pitch = 3.2;
 

@@ -129,11 +129,12 @@ PIN_LABELS = {  # labels beside each socket pin, to check module orientation bef
     "J2": ["VDD", "SDA", "GND", "SCL"],
     "J3": ["VCC", "TRG", "ECH", "GND"],
 }
-# Module outlines on F.Fab (PLACEHOLDER sizes until measured): (label, x0, y0, x1, y1)
+# Module outlines on F.Fab (user-measured 2026-11-13; header pin row assumed 1.27 mm in from
+# the module's edge, each module lying flat away from its header): (label, x0, y0, x1, y1)
 FAB = [
     ("ESP32-C3 SuperMini", 0.0, 3.0, 22.5, 21.0),
-    ("GY-346 (placeholder 15.5x20.5)", 26.8, 1.75, 42.3, 22.25),
-    ("AHT20 (placeholder 12x12)", 55.9, 6.0, 67.9, 18.0),
+    ("GY-346 14x21", 26.83, 1.5, 40.83, 22.5),
+    ("AHT20 15x15", 55.93, 4.5, 70.93, 19.5),
 ]
 
 
