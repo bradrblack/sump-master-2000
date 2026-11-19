@@ -1,4 +1,4 @@
-// The status and calibration page served at http://sm2k.local/ (see the "Web
+// The status and calibration page served at http://<name>.local/ (see the "Web
 // page" section of sm2k.ino). One self-contained file: no external scripts,
 // fonts or images, so it works with no internet connection.
 #pragma once
@@ -75,7 +75,7 @@ ol{margin:0 0 10px;padding-left:20px}ol li{margin-bottom:10px}.row{display:flex;
 </form><p class="note">Saving asks for a user name and password: <b>admin</b> and the admin password (the OTA password, unless you have changed it below). Settings are kept on the board and survive restarts and updates.</p></div>
 <div class="card"><h2>Device</h2><div id="dsaved"></div>
 <form method="post" action="/device" id="fd">
-<label>Device name<input name="name" required pattern="[a-z0-9]([a-z0-9\-]{0,22}[a-z0-9])?" autocapitalize="off" spellcheck="false"></label>
+<label>Device name (also <i>name</i>.local)<input name="name" required pattern="[a-z0-9]([a-z0-9\-]{0,22}[a-z0-9])?" autocapitalize="off" spellcheck="false"></label>
 <label>Time zone (POSIX TZ)<input name="tz" list="tzs" required autocapitalize="off" spellcheck="false"></label>
 <datalist id="tzs">
 <option value="EST5EDT,M3.2.0,M11.1.0/2">US Eastern</option>
@@ -89,7 +89,7 @@ ol{margin:0 0 10px;padding-left:20px}ol li{margin-bottom:10px}.row{display:flex;
 <option value="UTC0">UTC</option>
 </datalist>
 <div class="btns"><button class="go" type="submit">Save device</button></div>
-</form><p class="note">The name is used in notifications, as the InfluxDB <code>device</code> tag and as the Home Assistant device; lowercase letters, digits and -. The board stays at <b>sm2k.local</b>. The time zone sets log times, the daily report and the 3 AM restart. Both take effect at once.</p></div>
+</form><p class="note">The name is the board's network name (<i>name</i>.local) and is used in notifications, as the InfluxDB <code>device</code> tag and as the Home Assistant device; lowercase letters, digits and -. Give each board its own. Renaming restarts the board under its new address. The time zone sets log times, the daily report and the 3 AM restart, and takes effect at once.</p></div>
 <div class="card"><h2>Connections</h2><div id="csaved"></div><p class="sub" id="cstat">&nbsp;</p>
 <form method="post" action="/connections" id="fc">
 <label>Telegraf address (empty turns it off)<input name="tg_url" placeholder="http://server:8186/sump" autocapitalize="off"></label>
