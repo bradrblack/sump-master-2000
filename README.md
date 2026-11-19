@@ -372,8 +372,11 @@ cable is needed once the board is installed.
 - **Live readings**, refreshed every 2 seconds: pump state, vibration, water
   depth, air temperature and humidity, Wi-Fi signal, and a chart of the last
   few minutes of vibration against the two thresholds.
-- **Calibration readings:** the idle vibration since the last restart (average
-  and peak), the last pump run (average and lowest), and suggested thresholds.
+- **Calibrate:** a guided measurement, **Measure idle (30 s)** with the pump
+  off and **Measure running (30 s)** with it running, then **Use suggested
+  thresholds** (see [Calibration](#calibration)). Below it, the passive
+  readings: the idle vibration since the last restart (average and peak) and
+  the last pump run (average and lowest).
 - **Settings** (calibration, below) and **Connections** (Telegraf address, ntfy
   topic, MQTT broker and login, admin password), saved on the board. Saving
   asks for a user name and password: `admin` and the admin password, which is
@@ -382,10 +385,14 @@ cable is needed once the board is installed.
   network. Anything you type into the form (an MQTT password, a new admin
   password) does cross your network unencrypted, since the page is plain HTTP.
   The ntfy topic and saved passwords are never shown back.
+- **Device:** the device name (used in notifications, as the InfluxDB
+  `device` tag and as the Home Assistant device) and the time zone (a POSIX TZ
+  string; the box lists common ones). Both take effect at once; the board
+  stays at `sm2k.local` whatever its name.
 - **Log:** the last 120 log lines (everything the serial output shows except
   the once-a-second status line).
 
-The calibration readings, settings, connections and log sit under one "Show
+The calibration, settings, device, connections and log sit under one "Show
 more settings" divider below the chart, so the page opens on just the live
 readings. It starts closed, and opens by itself after a save so you see the
 confirmation.
@@ -443,9 +450,22 @@ firmware updates.
 | High-water alarm depth, and how far below it clears (cm) | `HIGH_WATER_CM`, `HIGH_WATER_HYST_CM` |
 | A run should lower the water by (cm) | `MIN_DROP_CM` |
 
-- **Vibration thresholds:** let the pump run once, then read the web page's
-  calibration readings: both thresholds belong between the idle average and
-  the last run's lowest value (the page suggests a pair). The Grafana panel
+- **Vibration thresholds:** use the **Calibrate** card on the web page.
+  1. With the pump **off** (and the house as busy as it usually is), press
+     **Measure idle (30 s)**.
+  2. With the pump **running** (pour a bucket of water into the pit if it
+     needs a push), press **Measure running (30 s)**. A run shorter than 30 s
+     is fine: press **Stop** when the pump stops.
+  3. Press **Use suggested thresholds**, check the numbers and **Save**.
+
+  The suggestion puts both thresholds between the loudest idle moment and the
+  quietest running moment (start at 60% and stop at 30% of the gap). If the
+  running level dips close to idle it uses the running average instead (50% /
+  25%), and if idle bumps reach the running level it measures from the idle
+  average. If the page says running is too close to idle, mount the sensor
+  more firmly or closer to the pump and measure again. The passive lines
+  under it (idle since restart, last pump run) let you check the thresholds
+  after a few real runs. The Grafana panel
   "Vibration: idle and running, against the thresholds" shows the same over
   days: both dashed lines should stay above the idle readings and below
   "Running lowest". The board on a desk idles at about 0.2 m/s².

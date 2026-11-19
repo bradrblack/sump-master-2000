@@ -6,6 +6,28 @@ to `FIRMWARE_VERSION` in `src/sm2k.ino`.
 Sump Master 2000 is a fork of the vibration-monitor project, taken at
 `2026-09-22r1`. Entries below that point are the original project's history.
 
+## 2026-11-19r2
+
+Brings the guided calibration and the device settings over from the Device
+Monitor's web page. Both are under "Show more settings".
+
+- **Calibrate card** (replaces "Calibration readings"): **Measure idle (30 s)**
+  with the pump off, **Measure running (30 s)** with it running, then **Use
+  suggested thresholds** fills the start and stop thresholds into Settings for
+  you to check and save. The suggestion is the Device Monitor's: between the
+  loudest idle moment and the quietest running moment (60% / 30% of the gap),
+  falling back to the running or idle average when the two overlap. Measuring
+  changes nothing, so it needs no login; `POST /calibrate` with
+  `phase=idle|run|stop` (and optional `secs`, 5-600). The capture shows in
+  `/api/status` as `cal`. The passive idle and last-run lines stay on the card.
+- **Device card:** the device name (ntfy titles, the InfluxDB `device` tag, the
+  Home Assistant device and MQTT topics) and the time zone (POSIX TZ, with a
+  list of common ones), saved on the board (`POST /device`, admin login). Both
+  take effect at once, with no restart. A rename first removes the old name's
+  Home Assistant entries, then reconnects under the new name. `DEVICE_NAME`
+  and `TZ_STRING` are now only the defaults. The board stays at `sm2k.local`.
+- The nightly restart waits while a calibration capture is running.
+
 ## 2026-11-19r1
 
 - Web page: calibration readings, settings, connections and the log now sit
