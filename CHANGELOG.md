@@ -6,6 +6,17 @@ to `FIRMWARE_VERSION` in `src/sm2k.ino`.
 Sump Master 2000 is a fork of the vibration-monitor project, taken at
 `2026-09-22r1`. Entries below that point are the original project's history.
 
+## 2026-11-19r3
+
+- **Maintenance card** on the web page (under "Show more settings"), from the
+  Device Monitor: **Upload and install** takes `.pio/build/sump/firmware.bin`
+  (`POST /update`, admin login) and **Restart** restarts the board
+  (`POST /restart`). A web upload runs the same trial and rollback as
+  ArduinoOTA: it must come back with Wi-Fi and every sensor that worked before
+  within 10 minutes, or it rolls back. Uploads are refused while the pump runs.
+- A restart from the web page is recorded as "Restart from the web page": it
+  doesn't count towards the unexpected-reboot number and sends no push.
+
 ## 2026-11-19r2
 
 Brings the guided calibration and the device settings over from the Device
