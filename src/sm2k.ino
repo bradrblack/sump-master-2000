@@ -25,14 +25,16 @@
 #include "web_page.h"
 
 // Bump on each flash you want to identify later -- format: YYYY-MM-DDrN.
-#define FIRMWARE_VERSION "2026-11-19r1"
+#define FIRMWARE_VERSION "2026-11-19r2"
 
 // ---- Configuration (build flags, see platformio.ini) ------------------------
 // The thresholds and pit numbers below are the DEFAULTS. Each can be changed
 // from the web page (http://sm2k.local/) without reflashing; changed values are
 // kept in NVS and read into `cfg` at boot (see "Calibration settings").
-// DEVICE_NAME appears in every ntfy message and as the InfluxDB "device" tag;
-// keep it to plain characters (no spaces, quotes or commas).
+// DEVICE_NAME is the starting device name: it appears in every ntfy message, as
+// the InfluxDB "device" tag and in the Home Assistant topics. It can be changed
+// on the web page (Device card, kept in NVS as n_name): 1-24 characters, a-z,
+// 0-9 and "-". The network name stays OTA_HOSTNAME (sm2k.local) either way.
 #ifndef DEVICE_NAME
 #error "DEVICE_NAME is not set. Build the sump environment: `pio run -e sump` (see platformio.ini)."
 #endif
@@ -224,7 +226,8 @@ const uint8_t  ADXL346_DEVICE_ID        = 0xE6;
 
 // Scheduled reboot once a day at a fixed local hour, to guard against slow heap
 // fragmentation. The daily report is pushed just before it. POSIX TZ string
-// (not a fixed offset) so DST is handled -- US Eastern.
+// (not a fixed offset) so DST is handled. TZ_STRING (US Eastern) is the default;
+// the time zone can be changed on the web page (Device card, NVS key n_tz).
 #define TZ_STRING   "EST5EDT,M3.2.0,M11.1.0/2"
 #define REBOOT_HOUR 3
 const char *NTP_SERVER = "pool.ntp.org";
@@ -368,6 +371,8 @@ Settings cfg = DEFAULT_SETTINGS;
 // ntfy topic or MQTT host turns that output off. The admin password (for
 // saving settings on the web page) starts as the OTA password.
 struct NetConfig {
+  char     name[25];       // device name: ntfy titles, InfluxDB tag, Home Assistant
+  char     tz[48];         // POSIX TZ string
   char     wifiSsid[33];
   char     wifiPass[65];
   char     telegrafUrl[128];
@@ -379,6 +384,7 @@ struct NetConfig {
   char     adminPass[33];
 };
 NetConfig net;
+const char *devName() { return net.name; }
 
 // ---- MQTT / Home Assistant ------------------------------------------------------
 // State goes to <base>/state as one retained JSON message; <base>/status is
@@ -447,6 +453,15 @@ RmsAcc   vibPending;
 float    lastRunSeconds = 0;
 uint32_t lastRunEndMs = 0;
 float    statusMaxRms = 0;      // loudest window in the last full second (for the web page)
+
+// Guided calibration, started from the web page: every window for a fixed time
+// while the pump is known to be idle, then while it's running. The page turns
+// the two captures into suggested thresholds.
+const uint32_t CAL_DEFAULT_MS = 30000;
+enum CalPhase { CAL_NONE = 0, CAL_IDLE = 1, CAL_RUN = 2 };
+CalPhase calPhase = CAL_NONE;
+uint32_t calEndMs = 0;
+RmsAcc   calIdle, calRun;
 
 // ---- Log kept for the web page -------------------------------------------------
 // The last LOG_LINES log lines (not the once-a-second status line).
@@ -558,9 +573,10 @@ int sendNtfy(const NtfyMsg &m) {
 }
 
 // Queues a push. The body is printf-formatted. With no ntfy topic set it's only logged.
-void notify(uint8_t priority, const char *tags, const char *title, const char *fmt, ...) {
+// The title is the device name followed by titleSuffix (e.g. ": HIGH WATER").
+void notify(uint8_t priority, const char *tags, const char *titleSuffix, const char *fmt, ...) {
   NtfyMsg m;
-  snprintf(m.title, sizeof(m.title), "%s", title);
+  snprintf(m.title, sizeof(m.title), "%s%s", devName(), titleSuffix);
   va_list args;
   va_start(args, fmt);
   vsnprintf(m.body, sizeof(m.body), fmt, args);
@@ -626,9 +642,9 @@ void escapeString(const char *s, char *out, size_t len) {
 void tgPoint(const char *measurement, const char *fields, uint32_t ageMs = 0) {
   char line[TG_LINE_LEN];
   uint64_t ns = epochNs(ageMs);
-  int n = ns ? snprintf(line, sizeof(line), "%s,device=%s %s %llu", measurement, DEVICE_NAME,
+  int n = ns ? snprintf(line, sizeof(line), "%s,device=%s %s %llu", measurement, devName(),
                         fields, (unsigned long long)ns)
-             : snprintf(line, sizeof(line), "%s,device=%s %s", measurement, DEVICE_NAME, fields);
+             : snprintf(line, sizeof(line), "%s,device=%s %s", measurement, devName(), fields);
   if (n >= (int)sizeof(line)) {
     logf("[tg] point too long, dropped: %s", measurement);
     return;
@@ -681,7 +697,7 @@ bool serviceTelegraf(uint32_t now, bool force = false) {
     lastTgOkMs = now;
     if (tgAlerted) {
       tgAlerted = false;
-      notify(PRIO_INFO, "white_check_mark", DEVICE_NAME ": Telegraf reachable again",
+      notify(PRIO_INFO, "white_check_mark", ": Telegraf reachable again",
              "Sending data again. %lu point(s) were dropped while the queue was full.",
              (unsigned long)tgDropped);
     }
@@ -699,7 +715,7 @@ bool serviceTelegraf(uint32_t now, bool force = false) {
 void checkTelegrafWatchdog(uint32_t now) {
   if (tgCount == 0 || tgAlerted || now - lastTgOkMs < TG_DOWN_ALERT_MS) return;
   tgAlerted = true;
-  notify(PRIO_INFO, "warning", DEVICE_NAME ": can't reach Telegraf",
+  notify(PRIO_INFO, "warning", ": can't reach Telegraf",
          "No data sent for %lu min; %d point(s) queued on the board.",
          (unsigned long)((now - lastTgOkMs) / 60000), tgCount);
 }
@@ -801,7 +817,7 @@ void reportBoot() {
   tgPoint("sump_boot", fields);
 
   if (reason.length() == 0 || reason == REASON_DAILY_REBOOT || reason == REASON_OTA_UPDATE) return;
-  notify(PRIO_INFO, "arrows_counterclockwise", DEVICE_NAME " rebooted",
+  notify(PRIO_INFO, "arrows_counterclockwise", " rebooted",
          "%s (reboot #%lu) at %s", reason.c_str(), (unsigned long)count, logTimestamp());
 }
 
@@ -852,7 +868,7 @@ void checkOtaState() {
     if (trialVer.length() > 0) {
       String why = prefs.isKey("trial_fail") ? prefs.getString("trial_fail", "")
                                              : String("it crashed or restarted before passing its health check");
-      notify(PRIO_ALERT, "warning", DEVICE_NAME ": update rolled back",
+      notify(PRIO_ALERT, "warning", ": update rolled back",
              "Firmware %s failed: %s. Back on %s.", trialVer.c_str(), why.c_str(), FIRMWARE_VERSION);
     }
     prefs.remove("trial_ver");
@@ -885,7 +901,7 @@ void checkOtaTrial(uint32_t now) {
     prefs.remove("pre_health");
     prefs.end();
     logf("[OTA] trial passed, firmware %s marked good", FIRMWARE_VERSION);
-    notify(PRIO_INFO, "arrow_up", DEVICE_NAME " updated",
+    notify(PRIO_INFO, "arrow_up", " updated",
            "Firmware %s -> %s, passed its health check.", prev.c_str(), FIRMWARE_VERSION);
   } else if (now >= OTA_TRIAL_TIMEOUT_MS) {
     char why[128];
@@ -1075,7 +1091,7 @@ void accelLost(const char *why) {
        why, (unsigned long)(ACCEL_RETRY_MS / 1000));
   if (accelAlerted) return;
   accelAlerted = true;
-  notify(PRIO_ALERT, "warning", DEVICE_NAME ": accelerometer not responding",
+  notify(PRIO_ALERT, "warning", ": accelerometer not responding",
          "Accelerometer (ADXL346) %s. Pump on/off detection is paused; water level, alarms "
          "and reporting carry on. Retrying every %lu s.", why, (unsigned long)(ACCEL_RETRY_MS / 1000));
 }
@@ -1115,7 +1131,7 @@ void checkSensorWatchdog(uint32_t now) {
     Wire.begin(SDA_PIN, SCL_PIN, I2C_CLOCK_HZ);
     if (startAccel() && accelAlerted) {
       accelAlerted = false;
-      notify(PRIO_INFO, "white_check_mark", DEVICE_NAME ": accelerometer OK",
+      notify(PRIO_INFO, "white_check_mark", ": accelerometer OK",
              "Accelerometer answering again; pump on/off detection resumed.");
     }
     return;
@@ -1170,7 +1186,7 @@ void finishDropCheck(float after) {
     tgPoint("sump_cycle", fields);
     // The level sensor's own alert already covers a dead sensor.
     if (!levelAlerted) {
-      notify(PRIO_INFO, "grey_question", DEVICE_NAME ": can't verify pump run",
+      notify(PRIO_INFO, "grey_question", ": can't verify pump run",
              "Ran %.1f s, but there was no level reading %s the run, so it's unknown whether the level dropped.",
              dropRunSeconds, isnan(before) ? "before" : "after");
     }
@@ -1185,7 +1201,7 @@ void finishDropCheck(float after) {
   addField(fields, sizeof(fields), "result=\"%s\"", ok ? "ok" : "no_drop");
   tgPoint("sump_cycle", fields);
   if (!ok) {
-    notify(PRIO_ALERT, "warning", DEVICE_NAME ": pump ran but level didn't drop",
+    notify(PRIO_ALERT, "warning", ": pump ran but level didn't drop",
            "Ran %.1f s; water %.1f -> %.1f cm (dropped %.1f cm, expected at least %.1f). "
            "Check the discharge line, check valve and pump.",
            dropRunSeconds, before, after, drop, cfg.minDropCm);
@@ -1203,13 +1219,13 @@ void setRunState(bool running, uint32_t eventMs) {
   if (running) {
     runStartMs = eventMs;
     startDropCheck(millis());
-    logf("%s STARTED", DEVICE_NAME);
+    logf("%s STARTED", devName());
     addField(fields, sizeof(fields), "event=\"start\",running=1i");
     if (!isnan(runLevelBefore)) addField(fields, sizeof(fields), "level_cm=%.1f", runLevelBefore);
     if (!isnan(runLevelBefore)) {
-      notify(PRIO_PUMP, "", DEVICE_NAME " started", "Started at %s (water %.1f cm)", at, runLevelBefore);
+      notify(PRIO_PUMP, "", " started", "Started at %s (water %.1f cm)", at, runLevelBefore);
     } else {
-      notify(PRIO_PUMP, "", DEVICE_NAME " started", "Started at %s", at);
+      notify(PRIO_PUMP, "", " started", "Started at %s", at);
     }
   } else {
     uint32_t dur = eventMs - runStartMs;
@@ -1219,7 +1235,7 @@ void setRunState(bool running, uint32_t eventMs) {
     periodCycles++;
     periodRunMs += dur;
     if (dur > longestRunMs) longestRunMs = dur;
-    logf("%s STOPPED - ran %.1f s (cycle %lu, total run %.1f s)", DEVICE_NAME,
+    logf("%s STOPPED - ran %.1f s (cycle %lu, total run %.1f s)", devName(),
          seconds, (unsigned long)cycleCount, totalRunMs / 1000.0);
     addField(fields, sizeof(fields), "event=\"stop\",running=0i,seconds=%.1f", seconds);
     // How hard the pump shook during this run, for setting the thresholds.
@@ -1231,7 +1247,7 @@ void setRunState(bool running, uint32_t eventMs) {
       logf("[vib] run: average %.3f, lowest %.3f, highest %.3f m/s^2 RMS", vibThisRun.avg(), vibThisRun.mn, vibThisRun.mx);
     }
     vibThisRun.reset();
-    notify(PRIO_PUMP, "", DEVICE_NAME " stopped", "Stopped at %s (ran %.1f s)", at, seconds);
+    notify(PRIO_PUMP, "", " stopped", "Stopped at %s (ran %.1f s)", at, seconds);
     dropCheckPending = true;
     dropStopMs = eventMs;
     dropRunSeconds = seconds;
@@ -1247,11 +1263,29 @@ void countIdle(float rms)          { vibIdle.add(rms); vibIdleBoot.add(rms); }
 void countRunning(const RmsAcc &a) { vibRun.absorb(a); vibThisRun.absorb(a); }
 void countRunning(float rms)       { vibRun.add(rms); vibThisRun.add(rms); }
 
+// Adds one window to the running calibration capture, if any, and ends it on time.
+void serviceCalibration(float rms, uint32_t now) {
+  if (calPhase == CAL_NONE) return;
+  if (!accelOk) {
+    logf("[cal] capture stopped: the accelerometer stopped answering");
+    calPhase = CAL_NONE;
+    return;
+  }
+  if (calPhase == CAL_IDLE) calIdle.add(rms);
+  else calRun.add(rms);
+  if ((int32_t)(now - calEndMs) < 0) return;
+  const RmsAcc &a = calPhase == CAL_IDLE ? calIdle : calRun;
+  logf("[cal] %s capture done: %lu windows, average %.3f, lowest %.3f, highest %.3f m/s^2 RMS",
+       calPhase == CAL_IDLE ? "idle" : "running", (unsigned long)a.n, a.avg(), a.mn, a.mx);
+  calPhase = CAL_NONE;
+}
+
 // Called once per window with that window's RMS.
 void processWindow(float rms, uint32_t now) {
   lastRms = rms;
   if (rms > maxRmsSinceStatus) maxRmsSinceStatus = rms;
   if (rms >= cfg.offRms) loudWindowsSinceStatus++;
+  serviceCalibration(rms, now);
   if (!accelOk) return;  // no pump detection without the accelerometer
 
   // Debounced running/stopped state. Each window is also counted in the idle or
@@ -1309,7 +1343,7 @@ void checkBootStateCorrection(uint32_t now) {
   if (lastRecordedState == 1 && !deviceRunning) {
     logf("Last event was a start but the pump is idle after a restart; correcting");
     tgPoint("sump_event", "event=\"stop\",running=0i,note=\"restart\"");
-    notify(PRIO_PUMP, "", DEVICE_NAME " stopped",
+    notify(PRIO_PUMP, "", " stopped",
            "Stopped while the board was restarting (%s); run time unknown", logTimestamp());
     lastRecordedState = 0;
     saveLastRecordedState(0);
@@ -1335,7 +1369,7 @@ void checkHighWater(uint32_t now) {
     char fields[96] = "";
     addField(fields, sizeof(fields), "type=\"high_water\",active=1i,level_cm=%.1f", levelCm);
     tgPoint("sump_alarm", fields);
-    notify(PRIO_URGENT, "rotating_light", DEVICE_NAME ": HIGH WATER",
+    notify(PRIO_URGENT, "rotating_light", ": HIGH WATER",
            "Water %s (alarm at %.1f cm). Pump %s.", levelText().c_str(), cfg.highWaterCm,
            deviceRunning ? "running" : "not running");
   } else if (highWater && !levelNearLimit && levelCm < cfg.highWaterCm - cfg.highWaterHystCm) {
@@ -1345,7 +1379,7 @@ void checkHighWater(uint32_t now) {
     char fields[96] = "";
     addField(fields, sizeof(fields), "type=\"high_water\",active=0i,level_cm=%.1f", levelCm);
     tgPoint("sump_alarm", fields);
-    notify(PRIO_INFO, "white_check_mark", DEVICE_NAME ": water level OK",
+    notify(PRIO_INFO, "white_check_mark", ": water level OK",
            "All clear: water back down to %s.", levelText().c_str());
   }
 }
@@ -1356,11 +1390,11 @@ void checkHighWaterRepeat(uint32_t now) {
   if (!highWater || now - lastHighAlertMs < HIGH_WATER_REPEAT_MS) return;
   lastHighAlertMs = now;
   if (levelFresh(now)) {
-    notify(PRIO_URGENT, "rotating_light", DEVICE_NAME ": STILL HIGH WATER",
+    notify(PRIO_URGENT, "rotating_light", ": STILL HIGH WATER",
            "Water %s (alarm at %.1f cm). Pump %s.", levelText().c_str(), cfg.highWaterCm,
            deviceRunning ? "running" : "not running");
   } else {
-    notify(PRIO_URGENT, "rotating_light", DEVICE_NAME ": STILL HIGH WATER",
+    notify(PRIO_URGENT, "rotating_light", ": STILL HIGH WATER",
            "No current level reading; last was %s. Pump %s.", levelText().c_str(),
            deviceRunning ? "running" : "not running");
   }
@@ -1407,7 +1441,7 @@ void evaluateBurst(uint32_t now) {
   lastEchoMs = now;
   if (levelAlerted) {
     levelAlerted = false;
-    notify(PRIO_INFO, "white_check_mark", DEVICE_NAME ": level sensor OK", "Level readings are back.");
+    notify(PRIO_INFO, "white_check_mark", ": level sensor OK", "Level readings are back.");
   }
 
   float depth = cfg.sensorToFloorCm - dist;
@@ -1473,7 +1507,7 @@ void checkLevelWatchdogs(uint32_t now) {
   uint32_t since = lastEchoMs ? now - lastEchoMs : now;
   if (!levelAlerted && since >= LEVEL_MISSING_ALERT_MS) {
     levelAlerted = true;
-    notify(PRIO_ALERT, "warning", DEVICE_NAME ": level sensor not responding",
+    notify(PRIO_ALERT, "warning", ": level sensor not responding",
            "No reliable echo for %lu min. High-water and pump-run checks are blind until it recovers.",
            (unsigned long)(since / 60000));
   }
@@ -1519,7 +1553,7 @@ void serviceAht(uint32_t now) {
   ahtRetries = 0;
   if (ahtAlerted) {
     ahtAlerted = false;
-    notify(PRIO_INFO, "white_check_mark", DEVICE_NAME ": temp/humidity sensor OK", "AHT20 readings are back.");
+    notify(PRIO_INFO, "white_check_mark", ": temp/humidity sensor OK", "AHT20 readings are back.");
   }
 }
 
@@ -1527,7 +1561,7 @@ void checkAhtWatchdog(uint32_t now) {
   uint32_t since = ahtAtMs ? now - ahtAtMs : now;
   if (ahtAlerted || since < AHT_ALERT_MS) return;
   ahtAlerted = true;
-  notify(PRIO_ALERT, "warning", DEVICE_NAME ": temp/humidity sensor not responding",
+  notify(PRIO_ALERT, "warning", ": temp/humidity sensor not responding",
          "No AHT20 reading for %lu min (I2C address 0x38).", (unsigned long)(since / 60000));
 }
 
@@ -1597,7 +1631,7 @@ void sendDailyReport(uint32_t now) {
   }
 
   NtfyMsg m;
-  snprintf(m.title, sizeof(m.title), "%s daily report", DEVICE_NAME);
+  snprintf(m.title, sizeof(m.title), "%s daily report", devName());
   snprintf(m.body, sizeof(m.body),
            "Pump: %s\nWater: %s\nAir: %s\n%s\nFirmware %s",
            !accelOk ? "unknown (accelerometer not responding)" : deviceRunning ? "on" : "off",
@@ -1614,9 +1648,10 @@ void sendDailyReport(uint32_t now) {
   logf("[ntfy] daily report could not be sent");
 }
 
-// Reboots once per day at REBOOT_HOUR local time (see TZ_STRING), sending the
-// daily report first. Held off while the pump is running, anything is pending
-// or high water is active; the whole REBOOT_HOUR hour is the window.
+// Reboots once per day at REBOOT_HOUR local time (net.tz), sending the
+// daily report first. Held off while the pump is running, anything is pending,
+// high water is active or a calibration capture is running; the whole
+// REBOOT_HOUR hour is the window.
 void checkDailyReboot(uint32_t nowMs) {
   time_t now = time(nullptr);
   if (now < 100000) return; // NTP hasn't synced yet
@@ -1624,7 +1659,7 @@ void checkDailyReboot(uint32_t nowMs) {
   struct tm timeinfo;
   localtime_r(&now, &timeinfo);
   if (timeinfo.tm_hour != REBOOT_HOUR || timeinfo.tm_mday == lastRebootDay) return;
-  if (deviceRunning || ntfyCount > 0 || dropCheckPending || highWater || otaTrial) return;
+  if (deviceRunning || ntfyCount > 0 || dropCheckPending || highWater || otaTrial || calPhase != CAL_NONE) return;
 
   lastRebootDay = timeinfo.tm_mday;
   // Persisted, not just RAM: otherwise the reboot this triggers would see "not
@@ -1669,7 +1704,7 @@ void setupWiFi() {
 void setupTime() {
   // Re-kick SNTP now that WiFi is up (the early configTzTime() in setup() ran
   // with no network, so its first sync attempt failed and backed off).
-  configTzTime(TZ_STRING, NTP_SERVER);
+  configTzTime(net.tz, NTP_SERVER);
   logf("[NTP] Syncing time");
   time_t now = time(nullptr);
   uint32_t start = millis();
@@ -1825,12 +1860,18 @@ void jsonNum(char *buf, size_t len, const char *key, float v, int decimals, bool
   else jsonAdd(buf, len, "\"%s\":null,", key);
 }
 
+// {"n":..,"avg":..,"min":..,"max":..} for one set of window RMS values.
+void jsonAcc(char *buf, size_t len, const char *key, const RmsAcc &a) {
+  jsonAdd(buf, len, "\"%s\":{\"n\":%lu,\"avg\":%.3f,\"min\":%.3f,\"max\":%.3f},", key, (unsigned long)a.n, a.avg(), a.mn,
+          a.mx);
+}
+
 void handleWebStatus() {
-  static char j[1500];
+  static char j[2048];
   uint32_t now = millis();
   bool lvl = levelFresh(now), air = ahtFresh(now);
   j[0] = 0;
-  jsonAdd(j, sizeof(j), "{\"device\":\"%s\",\"version\":\"%s\",\"time\":\"%s\",\"uptime_s\":%lu,", DEVICE_NAME, FIRMWARE_VERSION,
+  jsonAdd(j, sizeof(j), "{\"device\":\"%s\",\"version\":\"%s\",\"time\":\"%s\",\"uptime_s\":%lu,", devName(), FIRMWARE_VERSION,
           logTimestamp(), (unsigned long)(now / 1000));
   jsonAdd(j, sizeof(j), "\"state\":\"%s\",\"high_water\":%s,", !accelOk ? "no-accel" : deviceRunning ? "running" : "idle",
           highWater ? "true" : "false");
@@ -1850,10 +1891,17 @@ void handleWebStatus() {
   jsonAdd(j, sizeof(j), "\"cfg\":{\"on\":%.3g,\"off\":%.3g,\"run_ms\":%lu,\"stop_ms\":%lu,\"floor_cm\":%.4g,\"high_cm\":%.4g,"
           "\"hyst_cm\":%.4g,\"drop_cm\":%.4g},", cfg.onRms, cfg.offRms, (unsigned long)cfg.runConfirmMs,
           (unsigned long)cfg.stopConfirmMs, cfg.sensorToFloorCm, cfg.highWaterCm, cfg.highWaterHystCm, cfg.minDropCm);
+  // Guided calibration: phase 0 = none, 1 = measuring idle, 2 = measuring running.
+  jsonAdd(j, sizeof(j), "\"cal\":{\"phase\":%d,\"left_s\":%lu,", (int)calPhase,
+          calPhase ? (unsigned long)(((int32_t)(calEndMs - now) > 0 ? calEndMs - now : 0) / 1000) : 0UL);
+  jsonAcc(j, sizeof(j), "idle", calIdle);
+  jsonAcc(j, sizeof(j), "run", calRun);
+  j[strlen(j) - 1] = 0;  // drop the trailing comma
+  jsonAdd(j, sizeof(j), "},");
   // Connections. The ntfy topic and the passwords are secrets, so only whether
   // they're set is shown (this endpoint needs no login).
-  jsonAdd(j, sizeof(j), "\"conn\":{\"wifi\":\"%s\",\"tg_url\":\"%s\",\"ntfy\":%s,\"mqtt_host\":\"%s\",\"mqtt_port\":%u,"
-          "\"mqtt_user\":\"%s\",\"mqtt_pass\":%s,\"mqtt\":\"%s\"}}", net.wifiSsid, net.telegrafUrl,
+  jsonAdd(j, sizeof(j), "\"conn\":{\"tz\":\"%s\",\"wifi\":\"%s\",\"tg_url\":\"%s\",\"ntfy\":%s,\"mqtt_host\":\"%s\",\"mqtt_port\":%u,"
+          "\"mqtt_user\":\"%s\",\"mqtt_pass\":%s,\"mqtt\":\"%s\"}}", net.tz, net.wifiSsid, net.telegrafUrl,
           net.ntfyTopic[0] ? "true" : "false", net.mqttHost, (unsigned)net.mqttPort, net.mqttUser,
           net.mqttPass[0] ? "true" : "false", !net.mqttHost[0] ? "off" : mqtt.connected() ? "connected" : mqttProblem());
   web.sendHeader("Cache-Control", "no-store");
@@ -1933,6 +1981,15 @@ bool plainText(const char *s) {
   return true;
 }
 
+// Device names go into ntfy titles, the InfluxDB "device" tag and MQTT topics:
+// 1-24 characters, a-z, 0-9 and "-", not at either end.
+bool validName(const char *s) {
+  size_t n = strlen(s);
+  if (n < 1 || n > 24 || s[0] == '-' || s[n - 1] == '-') return false;
+  for (; *s; s++) if (!((*s >= 'a' && *s <= 'z') || (*s >= '0' && *s <= '9') || *s == '-')) return false;
+  return true;
+}
+
 void loadNetString(const char *key, char *out, size_t len, const char *fallback) {
   if (prefs.isKey(key)) prefs.getString(key, out, len);
   else snprintf(out, len, "%s", fallback);
@@ -1940,6 +1997,8 @@ void loadNetString(const char *key, char *out, size_t len, const char *fallback)
 
 void loadNetConfig() {
   prefs.begin(NVS_NS, false);
+  loadNetString("n_name", net.name, sizeof(net.name), DEVICE_NAME);
+  loadNetString("n_tz", net.tz, sizeof(net.tz), TZ_STRING);
   loadNetString("n_ssid", net.wifiSsid, sizeof(net.wifiSsid), WIFI_SSID);
   loadNetString("n_wpass", net.wifiPass, sizeof(net.wifiPass), WIFI_PASS);
   loadNetString("n_tgurl", net.telegrafUrl, sizeof(net.telegrafUrl), TELEGRAF_URL);
@@ -1950,12 +2009,17 @@ void loadNetConfig() {
   loadNetString("n_admin", net.adminPass, sizeof(net.adminPass), OTA_PASSWORD);
   net.mqttPort = prefs.getUShort("n_mport", MQTT_PORT);
   prefs.end();
+  if (!validName(net.name)) snprintf(net.name, sizeof(net.name), "%s", DEVICE_NAME);
+  if (!net.tz[0]) snprintf(net.tz, sizeof(net.tz), "%s", TZ_STRING);
+  logf("[net] device \"%s\", time zone %s", net.name, net.tz);
   logf("[net] Wi-Fi \"%s\"; Telegraf %s; ntfy %s; MQTT %s%s", net.wifiSsid, net.telegrafUrl[0] ? net.telegrafUrl : "off",
        net.ntfyTopic[0] ? "on" : "off", net.mqttHost[0] ? net.mqttHost : "off", net.mqttUser[0] ? " (with login)" : "");
 }
 
 void saveNetConfig() {
   prefs.begin(NVS_NS, false);
+  prefs.putString("n_name", net.name);
+  prefs.putString("n_tz", net.tz);
   prefs.putString("n_ssid", net.wifiSsid);
   prefs.putString("n_wpass", net.wifiPass);
   prefs.putString("n_tgurl", net.telegrafUrl);
@@ -1986,7 +2050,7 @@ const char *mqttProblem() {
 }
 
 void setupMqtt() {
-  snprintf(mqttBase, sizeof(mqttBase), "sm2k/%s", DEVICE_NAME);
+  snprintf(mqttBase, sizeof(mqttBase), "sm2k/%s", devName());
   mqtt.setBufferSize(1024);
   mqtt.setKeepAlive(30);
   mqtt.setSocketTimeout(3);          // seconds
@@ -1996,11 +2060,11 @@ void setupMqtt() {
 // Tells Home Assistant about one entity (retained, so it survives HA restarts).
 bool publishHaDiscovery(const HaEntity &e) {
   char topic[96], msg[760];
-  snprintf(topic, sizeof(topic), "homeassistant/%s/sm2k_%s/%s/config", e.component, DEVICE_NAME, e.id);
+  snprintf(topic, sizeof(topic), "homeassistant/%s/sm2k_%s/%s/config", e.component, devName(), e.id);
   int n = snprintf(msg, sizeof(msg),
                    "{\"name\":\"%s\",\"uniq_id\":\"sm2k_%s_%s\",\"stat_t\":\"%s/state\",\"avty_t\":\"%s/status\","
                    "\"val_tpl\":\"{{ value_json.%s | default('None') }}\"",
-                   e.name, DEVICE_NAME, e.id, mqttBase, mqttBase, e.id);
+                   e.name, devName(), e.id, mqttBase, mqttBase, e.id);
   if (e.deviceClass[0]) n += snprintf(msg + n, sizeof(msg) - n, ",\"dev_cla\":\"%s\"", e.deviceClass);
   if (e.unit[0])        n += snprintf(msg + n, sizeof(msg) - n, ",\"unit_of_meas\":\"%s\"", e.unit);
   if (e.stateClass[0])  n += snprintf(msg + n, sizeof(msg) - n, ",\"stat_cla\":\"%s\"", e.stateClass);
@@ -2008,9 +2072,28 @@ bool publishHaDiscovery(const HaEntity &e) {
   n += snprintf(msg + n, sizeof(msg) - n,
                 ",\"dev\":{\"ids\":[\"sm2k_%s\"],\"name\":\"Sump Master 2000\",\"mf\":\"bradrblack\","
                 "\"mdl\":\"Sump Master 2000\",\"sw\":\"%s\",\"cu\":\"http://%s/\"}}",
-                DEVICE_NAME, FIRMWARE_VERSION, WiFi.localIP().toString().c_str());
+                devName(), FIRMWARE_VERSION, WiFi.localIP().toString().c_str());
   if (n >= (int)sizeof(msg)) return false;
   return mqtt.publish(topic, msg, true);
+}
+
+// On a rename: remove the old name's retained discovery messages and state, so
+// Home Assistant doesn't keep a dead copy of the device. Disconnects cleanly
+// (no "offline" will); the next serviceMqtt() connects under the new name and
+// sends discovery again.
+void mqttForgetName(const char *oldName) {
+  if (!mqtt.connected()) return;
+  char topic[96];
+  for (const HaEntity &e : HA_ENTITIES) {
+    snprintf(topic, sizeof(topic), "homeassistant/%s/sm2k_%s/%s/config", e.component, oldName, e.id);
+    mqtt.publish(topic, "", true);
+  }
+  snprintf(topic, sizeof(topic), "sm2k/%s/state", oldName);
+  mqtt.publish(topic, "", true);
+  snprintf(topic, sizeof(topic), "sm2k/%s/status", oldName);
+  mqtt.publish(topic, "", true);
+  mqtt.loop();
+  mqtt.disconnect();
 }
 
 // The whole state as one retained JSON message. A reading that isn't current
@@ -2044,7 +2127,7 @@ void serviceMqtt(uint32_t now) {
     if (lastMqttAttemptMs && now - lastMqttAttemptMs < MQTT_RETRY_MS) return;
     lastMqttAttemptMs = now ? now : 1;
     char clientId[40], will[64];
-    snprintf(clientId, sizeof(clientId), "sm2k-%s", DEVICE_NAME);
+    snprintf(clientId, sizeof(clientId), "sm2k-%s", devName());
     snprintf(will, sizeof(will), "%s/status", mqttBase);
     mqtt.setServer(net.mqttHost, net.mqttPort);
     bool ok = mqtt.connect(clientId, net.mqttUser[0] ? net.mqttUser : nullptr, net.mqttUser[0] ? net.mqttPass : nullptr,
@@ -2125,12 +2208,66 @@ void handleWebConnections() {
   web.send(303, "text/plain", "");
 }
 
+// POST /calibrate: phase=idle|run starts a capture (secs, default 30), phase=stop
+// ends it. It only measures and changes nothing, so it needs no login.
+void handleWebCalibrate() {
+  String phase = web.arg("phase");
+  uint32_t secs = web.hasArg("secs") ? (uint32_t)web.arg("secs").toInt() : CAL_DEFAULT_MS / 1000;
+  secs = constrain(secs, 5UL, 600UL);
+  if (phase == "idle" || phase == "run") {
+    if (!accelOk) return sendSettingsError("The accelerometer is not answering, so there is nothing to measure.");
+    calPhase = phase == "idle" ? CAL_IDLE : CAL_RUN;
+    (calPhase == CAL_IDLE ? calIdle : calRun).reset();
+    calEndMs = millis() + secs * 1000;
+    logf("[cal] measuring %s vibration for %lu s", phase == "idle" ? "idle" : "running", (unsigned long)secs);
+  } else {
+    if (calPhase != CAL_NONE) logf("[cal] capture stopped");
+    calPhase = CAL_NONE;
+  }
+  web.sendHeader("Cache-Control", "no-store");
+  web.send(200, "text/plain", "ok");
+}
+
+// POST /device: device name and time zone. Both take effect at once. A new
+// name first removes the old name's Home Assistant entries.
+void handleWebDevice() {
+  if (!webAuthorized()) return;
+  String name = web.arg("name"), tz = web.arg("tz");
+  name.trim();
+  name.toLowerCase();
+  tz.trim();
+  if (!validName(name.c_str()))
+    return sendSettingsError("The name must be 1 to 24 characters: lowercase letters, digits and -, not at either end.");
+  if (!tz.length() || tz.length() >= sizeof(net.tz) || !plainText(tz.c_str()))
+    return sendSettingsError("The time zone must be a POSIX TZ string such as EST5EDT,M3.2.0,M11.1.0/2.");
+  if (tz != net.tz) {
+    snprintf(net.tz, sizeof(net.tz), "%s", tz.c_str());
+    configTzTime(net.tz, NTP_SERVER);
+    logf("[cfg] time zone set to %s", net.tz);
+  }
+  if (name != net.name) {
+    char oldName[sizeof(net.name)];
+    snprintf(oldName, sizeof(oldName), "%s", net.name);
+    mqttForgetName(oldName);
+    snprintf(net.name, sizeof(net.name), "%s", name.c_str());
+    setupMqtt();             // new topics and client ID
+    lastMqttAttemptMs = 0;   // reconnect (and send discovery) right away
+    mqttDirty = true;
+    logf("[cfg] renamed %s -> %s", oldName, net.name);
+  }
+  saveNetConfig();
+  web.sendHeader("Location", "/?dev=1");
+  web.send(303, "text/plain", "");
+}
+
 void setupWeb() {
   web.enableDelay(false);  // handleClient() must return at once when nobody is connected
   web.on("/", HTTP_GET, []() { web.send_P(200, "text/html; charset=utf-8", WEB_PAGE); });
   web.on("/api/status", HTTP_GET, handleWebStatus);
   web.on("/api/log", HTTP_GET, handleWebLog);
   web.on("/settings", HTTP_POST, handleWebSettings);
+  web.on("/calibrate", HTTP_POST, handleWebCalibrate);
+  web.on("/device", HTTP_POST, handleWebDevice);
   web.on("/connections", HTTP_POST, handleWebConnections);
   web.onNotFound([]() { web.send(404, "text/plain", "Not found"); });
   web.begin();
@@ -2159,7 +2296,7 @@ void setup(void) {
   Serial.println(BANNER);
   Serial.println();
 
-  logf("--- Sump Master 2000 (%s) v%s ---", DEVICE_NAME, FIRMWARE_VERSION);
+  logf("--- Sump Master 2000 v%s ---", FIRMWARE_VERSION);
 
   // Opened read-write so the namespace is created on a brand-new device (a
   // read-only open of a missing namespace logs an error on first boot).
@@ -2169,6 +2306,7 @@ void setup(void) {
   prefs.end();
   loadSettings();
   loadNetConfig();
+  configTzTime(net.tz, NTP_SERVER);  // the saved time zone, if it isn't TZ_STRING
 
   checkUnexpectedReset();
   checkOtaState();
