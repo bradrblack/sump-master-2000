@@ -26,7 +26,7 @@
 #include "web_page.h"
 
 // Bump on each flash you want to identify later -- format: YYYY-MM-DDrN.
-#define FIRMWARE_VERSION "2026-11-19r3"
+#define FIRMWARE_VERSION "2026-11-19r4"
 
 // ---- Configuration (build flags, see platformio.ini) ------------------------
 // The thresholds and pit numbers below are the DEFAULTS. Each can be changed
@@ -130,12 +130,12 @@ const uint32_t I2C_CLOCK_HZ = 100000;  // 400 kHz was unreliable on the bench (5
 const int LEVEL_TRIG_PIN = 3;
 const int LEVEL_ECHO_PIN = 4;
 
-// Onboard NeoPixel (WS2812) status LED: green = all clear, blue = pump running,
-// flashing red = high water (pump off), flashing purple = high water (pump on).
-// Dimmed because a full-brightness NeoPixel is blinding.
+// Onboard NeoPixel (WS2812) status LED; the colours are listed at
+// updateStatusLed(). Dimmed because a full-brightness NeoPixel is blinding.
 const int     LED_PIN        = 8;
 const uint8_t LED_BRIGHTNESS = 16;  // 0-255
 const uint32_t LED_FLASH_HALF_PERIOD_MS = 500;
+enum LedColor { LED_OFF_C, LED_GREEN, LED_YELLOW, LED_BLUE, LED_RED, LED_PURPLE, LED_CYAN };
 
 // ---- Vibration detection --------------------------------------------------
 // Samples are high-passed against a slow per-axis baseline (removes gravity and
@@ -951,29 +951,55 @@ void serviceOta() {
 }
 
 // ==========================================
-// Pump (vibration) sensor
+// Status LED
 // ==========================================
-// green = all clear, blue = pump running, flashing red = high water with the
-// pump not running, flashing purple = high water with the pump running.
-// Only writes to the LED when the colour changes.
-void updateStatusLed() {
-  static int lastColor = -1;
-  const bool flashOn = (millis() / LED_FLASH_HALF_PERIOD_MS) % 2 == 0;
-  int color;  // 0 off, 1 red, 2 purple, 3 blue, 4 green
-  if (highWater) color = flashOn ? (deviceRunning ? 2 : 1) : 0;
-  else color = deviceRunning ? 3 : 4;
-  if (color == lastColor) return;
-  lastColor = color;
+// The pump's state is the base colour; anything that needs attention blinks
+// over it, so a glance still shows whether the pump is running. From the
+// Device Monitor, with the sump's high-water flashing kept on top.
+//   green / yellow / blue        idle / vibration seen, not (yet) a run / pump running
+//   red, flashing                HIGH WATER, pump not running
+//   purple, flashing             HIGH WATER, pump running
+//   cyan, blinking               joining Wi-Fi at boot
+//   cyan <-> state colour        Wi-Fi down, reconnecting
+//   red, steady                  accelerometer not answering (red <-> cyan if Wi-Fi is down too)
+// Called once per window and from the boot-time join loop. Only writes to the
+// LED when the colour changes.
+bool wifiJoining = false;   // the blocking join at boot
+
+void ledWrite(LedColor c) {
   const uint8_t b = LED_BRIGHTNESS;
-  switch (color) {
-    case 1:  rgbLedWrite(LED_PIN, b, 0, 0); break;
-    case 2:  rgbLedWrite(LED_PIN, b, 0, b); break;
-    case 3:  rgbLedWrite(LED_PIN, 0, 0, b); break;
-    case 4:  rgbLedWrite(LED_PIN, 0, b, 0); break;
-    default: rgbLedWrite(LED_PIN, 0, 0, 0); break;
+  switch (c) {
+    case LED_GREEN:  rgbLedWrite(LED_PIN, 0, b, 0); break;
+    case LED_YELLOW: rgbLedWrite(LED_PIN, b, b * 2 / 3, 0); break;
+    case LED_BLUE:   rgbLedWrite(LED_PIN, 0, 0, b); break;
+    case LED_RED:    rgbLedWrite(LED_PIN, b, 0, 0); break;
+    case LED_PURPLE: rgbLedWrite(LED_PIN, b, 0, b); break;
+    case LED_CYAN:   rgbLedWrite(LED_PIN, 0, b, b); break;
+    default:         rgbLedWrite(LED_PIN, 0, 0, 0); break;
   }
 }
 
+void updateStatusLed() {
+  static int last = -1;
+  const bool half = (millis() / LED_FLASH_HALF_PERIOD_MS) % 2;   // 0.5 s phases
+  const bool wifiDown = WiFi.status() != WL_CONNECTED;
+  LedColor state = !accelOk               ? LED_RED
+                 : deviceRunning          ? LED_BLUE
+                 : lastRms >= cfg.offRms  ? LED_YELLOW
+                                          : LED_GREEN;
+  LedColor c;
+  if (wifiJoining)   c = half ? LED_CYAN : LED_OFF_C;
+  else if (highWater) c = half ? (deviceRunning ? LED_PURPLE : LED_RED) : LED_OFF_C;
+  else if (wifiDown) c = half ? LED_CYAN : state;
+  else               c = state;
+  if ((int)c == last) return;
+  last = c;
+  ledWrite(c);
+}
+
+// ==========================================
+// Pump (vibration) sensor
+// ==========================================
 // Reads X/Y/Z in one burst and reports whether the transfer worked (the
 // Adafruit getEvent() gives no sign of a failed read, just zeros or garbage).
 // Scaled the same way the library does, so the thresholds are unchanged.
@@ -1692,14 +1718,17 @@ void setupWiFi() {
   startNetwork();
   lastWifiAttempt = millis();
   uint32_t start = millis();
+  wifiJoining = true;
   while (WiFi.status() != WL_CONNECTED) {
     Serial.print(".");
+    updateStatusLed();
     delay(250);
     if (millis() - start > WIFI_CONNECT_TIMEOUT_MS) {
       Serial.println();
       restartWithReason("WiFi connect timeout at boot");
     }
   }
+  wifiJoining = false;
   Serial.println();
   logf("[WiFi] IP address %s", WiFi.localIP().toString().c_str());
 }

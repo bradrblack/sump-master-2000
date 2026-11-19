@@ -6,6 +6,15 @@ to `FIRMWARE_VERSION` in `src/sm2k.ino`.
 Sump Master 2000 is a fork of the vibration-monitor project, taken at
 `2026-09-22r1`. Entries below that point are the original project's history.
 
+## 2026-11-19r4
+
+- **More LED states**, from the Device Monitor: **yellow** while vibration is
+  above the stop threshold but not (yet) a run, **cyan blinking** while joining
+  Wi-Fi at boot, **cyan alternating** with the normal colour while Wi-Fi is
+  down, and **steady red** when the accelerometer isn't answering (the Device
+  Monitor blinks red for this, but flashing red already means high water here).
+  High-water flashing stays on top of everything except the boot join.
+
 ## 2026-11-19r3
 
 - **Maintenance card** on the web page (under "Show more settings"), from the
