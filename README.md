@@ -46,9 +46,19 @@ The sketch is `src/sm2k.ino`, with small drivers for the level sensor
 - **OTA updates** pushed from your computer over Wi-Fi, with automatic rollback if the
   new firmware isn't healthy. See [Updating](#updating-firmware).
 
-The onboard NeoPixel (GPIO 8, dimmed) shows the state: **green** = all clear,
-**blue** = pump running, **flashing red** = high water with the pump not running,
-**flashing purple** = high water with the pump running.
+The onboard NeoPixel (GPIO 8, dimmed) shows the state. The steady colour is
+the pump; anything that needs attention blinks over it.
+
+| LED | Meaning |
+|---|---|
+| green | all clear |
+| yellow | vibration above the stop threshold, not (yet) a pump run |
+| blue | pump running |
+| red, flashing | **high water**, pump not running |
+| purple, flashing | **high water**, pump running |
+| cyan, blinking | joining Wi-Fi at boot |
+| cyan alternating with the colour above | Wi-Fi down, reconnecting |
+| red, steady | accelerometer not answering (pump detection paused) |
 
 Serial output (115200) prints a status line once a second:
 `rms=0.208 max=0.219 loud=0 state=idle level=12.3cm air=17.9C/71% wifi=up tgq=0`
