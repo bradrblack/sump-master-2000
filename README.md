@@ -385,6 +385,11 @@ cable is needed once the board is installed.
 - **Log:** the last 120 log lines (everything the serial output shows except
   the once-a-second status line).
 
+The calibration readings, settings, connections and log sit under one "Show
+more settings" divider below the chart, so the page opens on just the live
+readings. It starts closed, and opens by itself after a save so you see the
+confirmation.
+
 Viewing needs no password; anyone on your network can see the readings and the
 log. The page is not reachable from the internet unless you set up a VPN.
 
