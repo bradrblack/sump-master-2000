@@ -6,6 +6,14 @@ to `FIRMWARE_VERSION` in `src/sm2k.ino`.
 Sump Master 2000 is a fork of the vibration-monitor project, taken at
 `2026-09-22r1`. Entries below that point are the original project's history.
 
+## 2026-11-19r1
+
+- Web page: calibration readings, settings, connections and the log now sit
+  under one "Show more settings" / "Hide more settings" divider below the
+  chart (the same control as the QRK Board's settings page). It starts closed,
+  so the page opens on the live readings; after a save it opens by itself so
+  the confirmation shows.
+
 ## 2026-11-11r4
 
 - **Home Assistant over MQTT.** With an MQTT broker set, the board publishes

@@ -30,6 +30,11 @@ button{padding:9px 16px;font:inherit;font-weight:600;border-radius:6px;border:1p
 button.go{background:var(--run);border-color:var(--run);color:#fff}
 pre{margin:0;max-height:260px;overflow:auto;font:12px/1.35 ui-monospace,Menlo,monospace;white-space:pre-wrap;word-break:break-word}
 .note{font-size:13px;color:var(--dim);margin:8px 0 0}.msg{color:var(--ok);font-weight:600}.err{color:var(--bad)}
+.more-btn{display:flex;align-items:center;gap:12px;width:100%;height:44px;margin:0 0 12px;padding:0;background:none;border:0;border-radius:8px;color:var(--dim);font:inherit;font-size:14px;font-weight:400;cursor:pointer}
+.more-btn::before,.more-btn::after{content:'';flex:1;height:1px;background:var(--line)}
+.more-btn i{display:block;width:7px;height:7px;margin:-3px 0 0 -4px;border-right:2px solid currentColor;border-bottom:2px solid currentColor;transform:rotate(45deg);transition:transform .15s}
+.more-btn.open i{transform:rotate(-135deg);margin-top:3px}
+.more-btn:hover,.more-btn:focus-visible{color:var(--fg)}.more-btn:focus-visible{outline:2px solid var(--run);outline-offset:-2px}
 </style></head><body><main>
 <div class="top"><div><h1>Sump Master 2000</h1><div class="sub" id="sub">connecting&hellip;</div></div><div><span class="badge" id="alarm" hidden>HIGH WATER</span> <span class="badge" id="state">&hellip;</span></div></div>
 <div class="tiles">
@@ -39,6 +44,8 @@ pre{margin:0;max-height:260px;overflow:auto;font:12px/1.35 ui-monospace,Menlo,mo
 </div>
 <div class="card"><h2>Vibration, last few minutes</h2><canvas id="chart"></canvas>
 <p class="note">Solid line: start threshold. Dashed line: stop threshold. The chart starts when this page is opened.</p></div>
+<button type="button" class="more-btn" id="more" aria-expanded="false" aria-controls="more-body"><span>Show more settings</span><i></i></button>
+<div id="more-body" hidden>
 <div class="card"><h2>Calibration readings</h2><table>
 <tr><td>Idle, since restart</td><td id="idle">&ndash;</td></tr>
 <tr><td>Last pump run</td><td id="lastrun">none since restart</td></tr>
@@ -70,6 +77,7 @@ pre{margin:0;max-height:260px;overflow:auto;font:12px/1.35 ui-monospace,Menlo,mo
 <div class="btns"><button class="go" type="submit">Save connections</button></div>
 </form><p class="note">The ntfy topic and the passwords are never shown here; leave those boxes empty to keep what is saved. Changes take effect at once, with no restart.</p></div>
 <div class="card"><h2>Log</h2><pre id="log"></pre></div>
+</div>
 </main><script>
 const $=id=>document.getElementById(id),f=(v,d)=>v==null?'–':v.toFixed(d);
 let hist=[],cfg=null,seq=0,filled=false;
@@ -77,6 +85,12 @@ const q=new URLSearchParams(location.search);
 if(q.has('saved'))$('saved').innerHTML='<p class="msg">Settings saved.</p>';
 if(q.has('conn'))$('csaved').innerHTML='<p class="msg">Connections saved.</p>';
 if(q.has('reset'))$('saved').innerHTML='<p class="msg">Settings reset to the firmware defaults.</p>';
+// Calibration, settings, connections and the log sit under one divider. It
+// starts closed, except straight after a save so the confirmation shows.
+function more(o){const b=$('more'),m=$('more-body');m.hidden=!o;b.setAttribute('aria-expanded',o);b.classList.toggle('open',o);
+b.firstChild.textContent=(o?'Hide':'Show')+' more settings';if(o){const p=$('log');p.scrollTop=p.scrollHeight;}}
+$('more').onclick=()=>more($('more-body').hidden);
+more(q.has('saved')||q.has('conn')||q.has('reset'));
 function draw(){const c=$('chart'),r=devicePixelRatio||1,w=c.clientWidth,h=c.clientHeight;c.width=w*r;c.height=h*r;
 const g=c.getContext('2d');g.scale(r,r);const cs=getComputedStyle(document.documentElement),col=n=>cs.getPropertyValue(n);
 let top=Math.max(cfg?cfg.on*1.6:1,...hist)*1.05;const y=v=>h-4-(v/top)*(h-8);
