@@ -14,6 +14,7 @@
 #include <esp_system.h>
 #include <esp_task_wdt.h>
 #include <esp_ota_ops.h>
+#include <Update.h>
 #include <esp32c3/rom/rtc.h>
 #include <Adafruit_ADXL345_U.h>
 // secrets.h is optional: everything in it can also be set from the web page.
@@ -25,7 +26,7 @@
 #include "web_page.h"
 
 // Bump on each flash you want to identify later -- format: YYYY-MM-DDrN.
-#define FIRMWARE_VERSION "2026-11-19r2"
+#define FIRMWARE_VERSION "2026-11-19r3"
 
 // ---- Configuration (build flags, see platformio.ini) ------------------------
 // The thresholds and pit numbers below are the DEFAULTS. Each can be changed
@@ -233,6 +234,7 @@ const uint8_t  ADXL346_DEVICE_ID        = 0xE6;
 const char *NTP_SERVER = "pool.ntp.org";
 #define REASON_DAILY_REBOOT "Daily scheduled reboot"
 #define REASON_OTA_UPDATE   "OTA update"
+#define REASON_USER         "Restart from the web page"
 
 // If the board was restarted while the pump's last recorded event was a
 // "start", correct it once the pump has been observed for this long and is
@@ -353,6 +355,7 @@ bool     bootCorrectionDone = false;
 bool     otaTrial = false;     // running a fresh OTA image that hasn't passed its health check
 uint8_t  otaRequiredHealth = HEALTH_ACCEL;
 volatile bool otaDone = false;
+uint32_t restartAtMs = 0;      // a restart asked for on the web page (0 = none)
 
 // ---- Calibration settings ---------------------------------------------------
 // Changeable from the web page; kept in NVS (keys c_*). Defaults are the build
@@ -751,7 +754,7 @@ void recordRebootReason(const char *reason) {
   prefs.putString("last_reason", reason);
   // The daily reboot and updates aren't symptoms of anything -- only count
   // exception reboots, so "reboot #N" means something went wrong N times.
-  if (strcmp(reason, REASON_DAILY_REBOOT) != 0 && strcmp(reason, REASON_OTA_UPDATE) != 0) {
+  if (strcmp(reason, REASON_DAILY_REBOOT) != 0 && strcmp(reason, REASON_OTA_UPDATE) != 0 && strcmp(reason, REASON_USER) != 0) {
     prefs.putUInt("reboot_count", prefs.getUInt("reboot_count", 0) + 1);
   }
   prefs.end();
@@ -816,7 +819,7 @@ void reportBoot() {
   addField(fields, sizeof(fields), "reason=\"%s\"", esc);
   tgPoint("sump_boot", fields);
 
-  if (reason.length() == 0 || reason == REASON_DAILY_REBOOT || reason == REASON_OTA_UPDATE) return;
+  if (reason.length() == 0 || reason == REASON_DAILY_REBOOT || reason == REASON_OTA_UPDATE || reason == REASON_USER) return;
   notify(PRIO_INFO, "arrows_counterclockwise", " rebooted",
          "%s (reboot #%lu) at %s", reason.c_str(), (unsigned long)count, logTimestamp());
 }
@@ -1926,13 +1929,20 @@ void handleWebLog() {
   web.send(200, "text/plain; charset=utf-8", out);
 }
 
-void sendSettingsError(const char *problem) {
-  String page = F("<!doctype html><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\">"
-                  "<body style=\"font:16px system-ui;padding:24px\"><h3>Settings not saved</h3><p>");
-  page += problem;
+// A small page with a title, a message and a link back; reload = go back to
+// the main page by itself after 25 s (for restarts).
+void sendMessagePage(int code, const char *title, const char *text, bool reload = false) {
+  String page = F("<!doctype html><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\">");
+  if (reload) page += F("<meta http-equiv=refresh content=\"25;url=/\">");
+  page += F("<body style=\"font:16px system-ui;padding:24px\"><h3>");
+  page += title;
+  page += F("</h3><p>");
+  page += text;
   page += F("</p><p><a href=\"/\">Back</a></p>");
-  web.send(400, "text/html; charset=utf-8", page);
+  web.send(code, "text/html; charset=utf-8", page);
 }
+
+void sendSettingsError(const char *problem) { sendMessagePage(400, "Settings not saved", problem); }
 
 // Digest authentication, so the admin password itself never crosses the
 // network: user "admin", and the admin password (the OTA password until it's
@@ -2260,6 +2270,67 @@ void handleWebDevice() {
   web.send(303, "text/plain", "");
 }
 
+// POST /restart (admin login).
+void handleWebRestart() {
+  if (!webAuthorized()) return;
+  sendMessagePage(200, "Restarting", "Back in about 20 seconds.", true);
+  restartAtMs = millis() + 1000;  // after the page has gone out
+}
+
+// Firmware upload from the web page (POST /update, multipart, the .bin from
+// .pio/build/sump/firmware.bin). The same trial and rollback as ArduinoOTA:
+// the new image must stay up with Wi-Fi and every sensor that works now, or it
+// rolls back by itself. Refused while the pump runs, since the upload stops
+// sampling for its whole length (like ArduinoOTA).
+// With digest login the browser's first POST is refused (its data is thrown
+// away), and it sends the file again with the login.
+bool uploadAuthorized = false;
+String uploadError;
+
+void handleWebUpdateUpload() {
+  HTTPUpload &up = web.upload();
+  if (up.status == UPLOAD_FILE_START) {
+    uploadError = "";
+    uploadAuthorized = web.authenticate("admin", net.adminPass);
+    if (!uploadAuthorized) return;
+    if (deviceRunning) {
+      uploadError = "the pump is running; try again once it stops";
+      return;
+    }
+    logf("[OTA] web upload starting: %s", up.filename.c_str());
+    prefs.begin(NVS_NS, false);
+    prefs.putUChar("pre_health", currentHealth(millis()));
+    prefs.end();
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN)) uploadError = Update.errorString();
+  } else if (up.status == UPLOAD_FILE_WRITE) {
+    esp_task_wdt_reset();
+    if (!uploadAuthorized || uploadError.length()) return;
+    if (Update.write(up.buf, up.currentSize) != up.currentSize) uploadError = Update.errorString();
+  } else if (up.status == UPLOAD_FILE_END) {
+    if (!uploadAuthorized || uploadError.length()) return;
+    if (!Update.end(true)) uploadError = Update.errorString();
+    else logf("[OTA] web upload complete: %u bytes", (unsigned)up.totalSize);
+  } else if (up.status == UPLOAD_FILE_ABORTED) {
+    if (uploadAuthorized && !uploadError.length()) Update.abort();
+    uploadError = "upload aborted";
+  }
+}
+
+void handleWebUpdateDone() {
+  if (!uploadAuthorized && !webAuthorized()) return;  // asks for the login; the browser sends the file again
+  if (uploadError.length() || !Update.isFinished()) {
+    if (Update.isRunning()) Update.abort();
+    String text = String("The update failed: ") + (uploadError.length() ? uploadError : String("incomplete upload")) +
+                  ". The board is still running the old firmware.";
+    logf("[OTA] web upload failed: %s", uploadError.length() ? uploadError.c_str() : "incomplete upload");
+    return sendMessagePage(400, "Update failed", text.c_str());
+  }
+  sendMessagePage(200, "Update received",
+                  "Restarting into the new firmware. It runs as a trial and rolls back by itself if it isn't healthy "
+                  "within 10 minutes. This page reloads in 25 seconds.", true);
+  otaDone = true;  // serviceOta() restarts into it after sending what's queued
+}
+
 void setupWeb() {
   web.enableDelay(false);  // handleClient() must return at once when nobody is connected
   web.on("/", HTTP_GET, []() { web.send_P(200, "text/html; charset=utf-8", WEB_PAGE); });
@@ -2269,6 +2340,8 @@ void setupWeb() {
   web.on("/calibrate", HTTP_POST, handleWebCalibrate);
   web.on("/device", HTTP_POST, handleWebDevice);
   web.on("/connections", HTTP_POST, handleWebConnections);
+  web.on("/restart", HTTP_POST, handleWebRestart);
+  web.on("/update", HTTP_POST, handleWebUpdateDone, handleWebUpdateUpload);
   web.onNotFound([]() { web.send(404, "text/plain", "Not found"); });
   web.begin();
   MDNS.addService("http", "tcp", 80);
@@ -2279,6 +2352,10 @@ void setupWeb() {
 // vibration samples; a few calls let one be accepted, read and answered in the
 // same window.
 void serviceWeb() {
+  if (restartAtMs && (int32_t)(millis() - restartAtMs) >= 0) {
+    flushQueues(5000);
+    restartWithReason(REASON_USER);
+  }
   if (WiFi.status() != WL_CONNECTED) return;
   for (int i = 0; i < 3; i++) web.handleClient();
 }

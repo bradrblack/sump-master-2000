@@ -24,7 +24,7 @@ table{border-collapse:collapse;width:100%}td{padding:3px 0;font-variant-numeric:
 form{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
 label{display:block;font-size:13px;color:var(--dim)}
 input,select{width:100%;padding:8px;margin-top:3px;font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:6px}
-input[type=checkbox]{width:auto;margin:0 6px 0 0}.chk{align-self:end;padding-bottom:9px}
+input[type=checkbox]{width:auto;margin:0 6px 0 0}input[type=file]{padding:6px}.chk{align-self:end;padding-bottom:9px}
 .btns{grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap}.full{grid-column:1/-1}
 button{padding:9px 16px;font:inherit;font-weight:600;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
 button.go{background:var(--run);border-color:var(--run);color:#fff}button:disabled{opacity:.5}
@@ -102,6 +102,13 @@ ol{margin:0 0 10px;padding-left:20px}ol li{margin-bottom:10px}.row{display:flex;
 <label>New admin password<input name="admin" type="password" autocomplete="new-password" placeholder="leave empty to keep the current one"></label>
 <div class="btns"><button class="go" type="submit">Save connections</button></div>
 </form><p class="note">The ntfy topic and the passwords are never shown here; leave those boxes empty to keep what is saved. Changes take effect at once, with no restart.</p></div>
+<div class="card"><h2>Maintenance</h2>
+<form method="post" action="/update" enctype="multipart/form-data" id="fu">
+<label class="full">Firmware update (<code>.pio/build/sump/firmware.bin</code>)<input type="file" name="fw" accept=".bin" required></label>
+<div class="btns"><button class="go" type="submit">Upload and install</button></div>
+</form><form method="post" action="/restart" style="margin-top:10px"><div class="btns">
+<button type="submit" onclick="return confirm('Restart the board now?')">Restart</button></div></form>
+<p class="note">Both ask for <b>admin</b> and the admin password. A new firmware runs as a trial and rolls back by itself if it isn't back up with Wi-Fi and every sensor that worked before within 10 minutes. Uploads are refused while the pump is running.</p></div>
 <div class="card"><h2>Log</h2><pre id="log"></pre></div>
 </div>
 </main><script>
@@ -112,7 +119,7 @@ if(q.has('saved'))$('saved').innerHTML='<p class="msg">Settings saved.</p>';
 if(q.has('conn'))$('csaved').innerHTML='<p class="msg">Connections saved.</p>';
 if(q.has('reset'))$('saved').innerHTML='<p class="msg">Settings reset to the firmware defaults.</p>';
 if(q.has('dev'))$('dsaved').innerHTML='<p class="msg">Device saved.</p>';
-// Calibration, settings, device, connections and the log sit under one divider. It
+// Calibration, settings, device, connections, maintenance and the log sit under one divider. It
 // starts closed, except straight after a save so the confirmation shows.
 function more(o){const b=$('more'),m=$('more-body');m.hidden=!o;b.setAttribute('aria-expanded',o);b.classList.toggle('open',o);
 b.firstChild.textContent=(o?'Hide':'Show')+' more settings';if(o){const p=$('log');p.scrollTop=p.scrollHeight;}}

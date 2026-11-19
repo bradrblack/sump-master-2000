@@ -128,6 +128,11 @@ After the first USB flash, update over Wi-Fi from your computer:
 pio run -e sump-ota -t upload
 ```
 
+Or, with no PlatformIO on hand: build `pio run`, then on the web page open
+"Show more settings", **Maintenance**, pick `.pio/build/sump/firmware.bin` and
+press **Upload and install** (user `admin` and the admin password). It gets the
+same trial and rollback as below.
+
 - The board is found as `sm2k.local` (change `upload_port` in `platformio.ini` to
   an IP address if mDNS doesn't resolve).
 - Updates are only accepted while the pump is idle (an upload pauses sampling
@@ -389,10 +394,14 @@ cable is needed once the board is installed.
   `device` tag and as the Home Assistant device) and the time zone (a POSIX TZ
   string; the box lists common ones). Both take effect at once; the board
   stays at `sm2k.local` whatever its name.
+- **Maintenance:** **Upload and install** a firmware file
+  (`.pio/build/sump/firmware.bin`) from the browser, with the same trial and
+  rollback as an OTA upload from PlatformIO (refused while the pump runs), and
+  **Restart**.
 - **Log:** the last 120 log lines (everything the serial output shows except
   the once-a-second status line).
 
-The calibration, settings, device, connections and log sit under one "Show
+The calibration, settings, device, connections, maintenance and log sit under one "Show
 more settings" divider below the chart, so the page opens on just the live
 readings. It starts closed, and opens by itself after a save so you see the
 confirmation.
