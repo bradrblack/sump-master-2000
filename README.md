@@ -143,8 +143,9 @@ Or, with no PlatformIO on hand: build `pio run`, then on the web page open
 press **Upload and install** (user `admin` and the admin password). It gets the
 same trial and rollback as below.
 
-- The board is found as `sm2k.local` (change `upload_port` in `platformio.ini` to
-  an IP address if mDNS doesn't resolve).
+- The board is found by its device name, `sm2k.local` until you rename it. For a
+  board with another name, or by IP if mDNS doesn't resolve, add
+  `--upload-port <name>.local` (or `--upload-port 192.168.x.y`) to the command.
 - Updates are only accepted while the pump is idle (an upload pauses sampling
   for ~15 s). If the pump is running the upload fails with no response; run it
   again once the pump stops.
@@ -384,6 +385,13 @@ Open `http://sm2k.local/` (or the board's IP address, printed at boot as
 `[web] ready`) from a phone or computer on the same network. No laptop or USB
 cable is needed once the board is installed.
 
+**More than one board** (two sump pits): every board starts as `sm2k`. Bring
+them up one at a time and rename each on its **Device** card (e.g. `sump-east`,
+`sump-west`) before powering the next. The name becomes its address
+(`http://sump-east.local/`), its ntfy title, its InfluxDB `device` tag (the
+Grafana dashboard's device picker) and its Home Assistant device. Update one
+over Wi-Fi with `pio run -e sump-ota -t upload --upload-port sump-east.local`.
+
 - **Live readings**, refreshed every 2 seconds: pump state, vibration, water
   depth, air temperature and humidity, Wi-Fi signal, and a chart of the last
   few minutes of vibration against the two thresholds.
@@ -402,8 +410,9 @@ cable is needed once the board is installed.
   The ntfy topic and saved passwords are never shown back.
 - **Device:** the device name (used in notifications, as the InfluxDB
   `device` tag and as the Home Assistant device) and the time zone (a POSIX TZ
-  string; the box lists common ones). Both take effect at once; the board
-  stays at `sm2k.local` whatever its name.
+  string; the box lists common ones). The name is also the board's network
+  name, `http://<name>.local/`: renaming restarts the board under the new
+  address. The time zone takes effect at once.
 - **Maintenance:** **Upload and install** a firmware file
   (`.pio/build/sump/firmware.bin`) from the browser, with the same trial and
   rollback as an OTA upload from PlatformIO (refused while the pump runs), and

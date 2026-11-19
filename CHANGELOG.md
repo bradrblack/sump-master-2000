@@ -6,6 +6,19 @@ to `FIRMWARE_VERSION` in `src/sm2k.ino`.
 Sump Master 2000 is a fork of the vibration-monitor project, taken at
 `2026-09-22r1`. Entries below that point are the original project's history.
 
+## 2026-11-19r5
+
+- **The network name follows the device name**, as on the Device Monitor: a
+  board answers at `http://<name>.local/` (mDNS, DHCP and OTA), so two boards
+  can run side by side once each has its own name. Renaming on the Device card
+  restarts the board under the new address (after removing the old name's
+  Home Assistant entries).
+- The default device name is now `sm2k` (was `sump`), so a new board is still
+  at `sm2k.local`. A board that never saved a name on the Device card changes
+  its InfluxDB `device` tag and Home Assistant IDs from `sump` to `sm2k`.
+- `sump-ota` still uploads to `sm2k.local`; add `--upload-port <name>.local`
+  (or an IP) for a renamed board.
+
 ## 2026-11-19r4
 
 - **More LED states**, from the Device Monitor: **yellow** while vibration is

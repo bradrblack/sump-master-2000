@@ -26,16 +26,17 @@
 #include "web_page.h"
 
 // Bump on each flash you want to identify later -- format: YYYY-MM-DDrN.
-#define FIRMWARE_VERSION "2026-11-19r4"
+#define FIRMWARE_VERSION "2026-11-19r5"
 
 // ---- Configuration (build flags, see platformio.ini) ------------------------
 // The thresholds and pit numbers below are the DEFAULTS. Each can be changed
-// from the web page (http://sm2k.local/) without reflashing; changed values are
+// from the web page (http://<name>.local/) without reflashing; changed values are
 // kept in NVS and read into `cfg` at boot (see "Calibration settings").
-// DEVICE_NAME is the starting device name: it appears in every ntfy message, as
-// the InfluxDB "device" tag and in the Home Assistant topics. It can be changed
-// on the web page (Device card, kept in NVS as n_name): 1-24 characters, a-z,
-// 0-9 and "-". The network name stays OTA_HOSTNAME (sm2k.local) either way.
+// DEVICE_NAME is the starting device name: it's the network name
+// (<name>.local, for the web page and OTA), and it appears in every ntfy
+// message, as the InfluxDB "device" tag and in the Home Assistant topics. It
+// can be changed on the web page (Device card, kept in NVS as n_name): 1-24
+// characters, a-z, 0-9 and "-". Give each board its own name.
 #ifndef DEVICE_NAME
 #error "DEVICE_NAME is not set. Build the sump environment: `pio run -e sump` (see platformio.ini)."
 #endif
@@ -105,9 +106,6 @@
 #ifndef MQTT_PASS
 #define MQTT_PASS ""
 #endif
-
-// Network name for OTA uploads (sm2k.local) and DHCP.
-#define OTA_HOSTNAME "sm2k"
 
 // NVS (flash) namespace for persisted state.
 #define NVS_NS "sm2k"
@@ -922,7 +920,7 @@ void restartAfterOta() {
 }
 
 void setupOta() {
-  ArduinoOTA.setHostname(OTA_HOSTNAME);
+  ArduinoOTA.setHostname(devName());   // also starts mDNS: <name>.local
   ArduinoOTA.setPassword(OTA_PASSWORD);
   // Reboot from loop() instead, after sending what's queued.
   ArduinoOTA.setRebootOnSuccess(false);
@@ -939,7 +937,7 @@ void setupOta() {
   ArduinoOTA.onEnd([]() { otaDone = true; });
   ArduinoOTA.onError([](ota_error_t err) { logf("[OTA] update failed (error %d)", (int)err); });
   ArduinoOTA.begin();
-  logf("[OTA] ready: %s.local", OTA_HOSTNAME);
+  logf("[OTA] ready: %s.local", devName());
 }
 
 // Accepts updates only while the pump is idle (an upload stops sampling for
@@ -1706,7 +1704,7 @@ void checkDailyReboot(uint32_t nowMs) {
 // Network
 // ==========================================
 void startNetwork() {
-  WiFi.setHostname(OTA_HOSTNAME);
+  WiFi.setHostname(devName());
   WiFi.mode(WIFI_STA);
   WiFi.setTxPower(WIFI_TX_POWER);
   WiFi.setAutoReconnect(true);
@@ -2267,8 +2265,9 @@ void handleWebCalibrate() {
   web.send(200, "text/plain", "ok");
 }
 
-// POST /device: device name and time zone. Both take effect at once. A new
-// name first removes the old name's Home Assistant entries.
+// POST /device: device name and time zone. The time zone takes effect at once.
+// A new name is also the network name, which only reaches DHCP and mDNS on a
+// fresh start, so it removes the old name's Home Assistant entries and restarts.
 void handleWebDevice() {
   if (!webAuthorized()) return;
   String name = web.arg("name"), tz = web.arg("tz");
@@ -2284,19 +2283,24 @@ void handleWebDevice() {
     configTzTime(net.tz, NTP_SERVER);
     logf("[cfg] time zone set to %s", net.tz);
   }
-  if (name != net.name) {
+  bool renamed = name != net.name;
+  if (renamed) {
     char oldName[sizeof(net.name)];
     snprintf(oldName, sizeof(oldName), "%s", net.name);
     mqttForgetName(oldName);
     snprintf(net.name, sizeof(net.name), "%s", name.c_str());
-    setupMqtt();             // new topics and client ID
-    lastMqttAttemptMs = 0;   // reconnect (and send discovery) right away
-    mqttDirty = true;
-    logf("[cfg] renamed %s -> %s", oldName, net.name);
+    logf("[cfg] renamed %s -> %s; restarting", oldName, net.name);
   }
   saveNetConfig();
-  web.sendHeader("Location", "/?dev=1");
-  web.send(303, "text/plain", "");
+  if (!renamed) {
+    web.sendHeader("Location", "/?dev=1");
+    web.send(303, "text/plain", "");
+    return;
+  }
+  String text = String("Restarting as <b>") + net.name + "</b>. In about 20 seconds, open <a href=\"http://" + net.name +
+                ".local/\">http://" + net.name + ".local/</a>.";
+  sendMessagePage(200, "Renamed", text.c_str());
+  restartAtMs = millis() + 1000;
 }
 
 // POST /restart (admin login).
@@ -2374,7 +2378,7 @@ void setupWeb() {
   web.onNotFound([]() { web.send(404, "text/plain", "Not found"); });
   web.begin();
   MDNS.addService("http", "tcp", 80);
-  logf("[web] ready: http://%s.local/ (http://%s/)", OTA_HOSTNAME, WiFi.localIP().toString().c_str());
+  logf("[web] ready: http://%s.local/ (http://%s/)", devName(), WiFi.localIP().toString().c_str());
 }
 
 // Once per 250 ms window. A request is answered in a few milliseconds, between
