@@ -15,7 +15,7 @@ static const char WEB_PAGE[] PROGMEM = R"HTML(<!doctype html>
 main{max-width:760px;margin:0 auto}h1{font-size:19px;margin:0}h2{font-size:14px;margin:0 0 8px;color:var(--dim);text-transform:uppercase;letter-spacing:.04em}
 .top{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px}
 .sub{color:var(--dim);font-size:13px}
-.badge{display:inline-block;padding:4px 12px;border-radius:999px;color:#fff;font-weight:600;background:var(--dim)}#alarm{background:var(--bad)}[hidden]{display:none!important}
+.badge{display:inline-block;padding:3px 11px;border:1px solid transparent;border-radius:999px;color:#fff;font-weight:600;background:var(--dim)}#alarm{background:var(--bad)}[hidden]{display:none!important}
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:12px}
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:12px}
 .tiles .card{margin:0}.big{font-size:24px;font-weight:650;font-variant-numeric:tabular-nums}
@@ -35,6 +35,10 @@ ol{margin:0 0 10px;padding-left:20px}ol li{margin-bottom:10px}.row{display:flex;
 .more-btn::before,.more-btn::after{content:'';flex:1;height:1px;background:var(--line)}
 .more-btn i{display:block;width:7px;height:7px;margin:-3px 0 0 -4px;border-right:2px solid currentColor;border-bottom:2px solid currentColor;transform:rotate(45deg);transition:transform .15s}
 .more-btn.open i{transform:rotate(-135deg);margin-top:3px}
+/* No answer from the board for a while: everything on screen is the last known value. */
+.stale #state{background:none!important;border:1px dashed var(--dim);color:var(--dim)}.stale #state::before{content:'last: '}
+.stale #alarm{opacity:.6}.stale #alarm::before{content:'last: '}
+.stale .tiles,.stale #chart{opacity:.4;filter:grayscale(1)}.stale #sub{color:var(--bad)}
 .more-btn:hover,.more-btn:focus-visible{color:var(--fg)}.more-btn:focus-visible{outline:2px solid var(--run);outline-offset:-2px}
 </style></head><body><main>
 <div class="top"><div><h1>Sump Master 2000</h1><div class="sub" id="sub">connecting&hellip;</div></div><div><span class="badge" id="alarm" hidden>HIGH WATER</span> <span class="badge" id="state">&hellip;</span></div></div>
@@ -113,7 +117,7 @@ ol{margin:0 0 10px;padding-left:20px}ol li{margin-bottom:10px}.row{display:flex;
 </div>
 </main><script>
 const $=id=>document.getElementById(id),f=(v,d)=>v==null?'–':v.toFixed(d);
-let hist=[],cfg=null,seq=0,filled=false,sug=null;
+let hist=[],cfg=null,seq=0,filled=false,sug=null,lastOk=0,subOk='';
 const q=new URLSearchParams(location.search);
 if(q.has('saved'))$('saved').innerHTML='<p class="msg">Settings saved.</p>';
 if(q.has('conn'))$('csaved').innerHTML='<p class="msg">Connections saved.</p>';
@@ -132,7 +136,7 @@ g.strokeStyle=col('--line');g.lineWidth=1;g.strokeRect(.5,.5,w-1,h-1);
 if(cfg){g.strokeStyle=col('--warn');g.beginPath();g.moveTo(0,y(cfg.on));g.lineTo(w,y(cfg.on));g.stroke();
 g.setLineDash([5,4]);g.beginPath();g.moveTo(0,y(cfg.off));g.lineTo(w,y(cfg.off));g.stroke();g.setLineDash([]);}
 g.strokeStyle=col('--run');g.lineWidth=1.5;g.beginPath();const n=150;
-hist.forEach((v,i)=>{const x=(i+n-hist.length)/(n-1)*w;i?g.lineTo(x,y(v)):g.moveTo(x,y(v));});g.stroke();
+let pen=false;hist.forEach((v,i)=>{const x=(i+n-hist.length)/(n-1)*w;if(v==null){pen=false;return;}pen?g.lineTo(x,y(v)):g.moveTo(x,y(v));pen=true;});g.stroke();
 g.fillStyle=col('--dim');g.font='11px system-ui';g.fillText(top.toFixed(2),4,13);}
 // Thresholds from the two 30 s measurements. Best case: every running reading is
 // above every idle one (lowest running vs loudest idle). If running dips close to
@@ -144,9 +148,16 @@ if(hi<=lo*1.25){hi=cr.avg;f=[.5,.25];note=' (running dips close to idle; the sto
 if(hi<=lo*1.5){lo=ci.avg;note=' (idle bumps reach the running level; the start and stop delays filter them)';}}
 if(hi<=lo*1.5||hi-lo<0.03)return[null,'running is too close to idle: mount the sensor closer to the pump, or firmer'];
 const on=lo+f[0]*(hi-lo),off=lo+f[1]*(hi-lo);return[{on:+on.toFixed(3),off:+off.toFixed(3)},'start '+on.toFixed(3)+' · stop '+off.toFixed(3)+note];}
-async function status(){try{const s=await(await fetch('/api/status')).json();cfg=s.cfg;
+// Live values count as stale once no status has come back for STALE_MS (three missed
+// polls, so one dropped request doesn't flicker). The page then greys the readings
+// and marks the pump state and alarm as the last known ones.
+const STALE_MS=6500,ago=ms=>{const t=Math.round(ms/1000);return t<60?t+' s':t<3600?Math.round(t/60)+' min':(t/3600).toFixed(1)+' h';};
+function fresh(){const age=Date.now()-lastOk,st=lastOk>0&&age>STALE_MS;document.body.classList.toggle('stale',st);
+if(st)$('sub').textContent='not responding · last update '+ago(age)+' ago';else if(lastOk)$('sub').textContent=subOk;}
+async function status(){const ac=new AbortController(),to=setTimeout(()=>ac.abort(),4000);
+try{const s=await(await fetch('/api/status',{signal:ac.signal})).json();cfg=s.cfg;
 document.title=s.device+' · Sump Master 2000';
-$('sub').textContent=s.device+' · firmware '+s.version+' · '+s.time+' · up '+(s.uptime_s/3600).toFixed(1)+' h';
+subOk=s.device+' · firmware '+s.version+' · '+s.time+' · up '+(s.uptime_s/3600).toFixed(1)+' h';
 const b=$('state'),m={running:['Pump running','--run'],idle:['Idle','--ok'],'no-accel':['No accelerometer','--bad']}[s.state];
 b.textContent=m[0];b.style.background='var('+m[1]+')';$('alarm').hidden=!s.high_water;
 $('rms').textContent=f(s.rms_max,3);
@@ -168,11 +179,15 @@ const D=$('fd');D.name.value=s.device;D.tz.value=s.conn.tz;
 const G=$('fc'),n=s.conn;G.tg_url.value=n.tg_url;G.mqtt_host.value=n.mqtt_host;G.mqtt_port.value=n.mqtt_port;G.mqtt_user.value=n.mqtt_user;
 G.ntfy.placeholder=n.ntfy?'set; leave empty to keep it':'not set';G.mqtt_pass.placeholder=n.mqtt_pass?'set; leave empty to keep it':'not set';}
 $('cstat').textContent='Wi-Fi "'+s.conn.wifi+'" · Telegraf '+(s.conn.tg_url?'on':'off')+' · ntfy '+(s.conn.ntfy?'on':'off')+' · Home Assistant (MQTT) '+s.conn.mqtt;
-}catch(e){$('sub').textContent='not responding…';}}
+lastOk=Date.now();
+}catch(e){if(!lastOk)$('sub').textContent='not responding…';else{hist.push(null);if(hist.length>150)hist.shift();draw();}}
+finally{clearTimeout(to);fresh();}}
 document.querySelectorAll('.cal').forEach(e=>e.onclick=async()=>{await fetch('/calibrate',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'phase='+(e.dataset.stop?'stop':e.dataset.p)});status();});
 $('use').onclick=()=>{if(!sug)return;const F=$('fs');F.on.value=sug.on;F.off.value=sug.off;F.scrollIntoView({behavior:'smooth'});F.on.focus();};
 async function log(){try{const t=await(await fetch('/api/log?since='+seq)).text(),i=t.indexOf('\n');seq=+t.slice(0,i);
 const body=t.slice(i+1);if(body){const p=$('log'),end=p.scrollTop+p.clientHeight>=p.scrollHeight-8;p.textContent+=body;if(end)p.scrollTop=p.scrollHeight;}}catch(e){}}
-status();log();setInterval(status,2000);setInterval(log,5000);
+// Poll again 2 s after each answer (or timeout), so slow replies never pile up.
+async function poll(){await status();setTimeout(poll,2000);}
+poll();log();setInterval(fresh,1000);setInterval(log,5000);
 </script></body></html>
 )HTML";

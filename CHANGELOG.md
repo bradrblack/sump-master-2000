@@ -6,6 +6,18 @@ to `FIRMWARE_VERSION` in `src/sm2k.ino`.
 Sump Master 2000 is a fork of the vibration-monitor project, taken at
 `2026-09-22r1`. Entries below that point are the original project's history.
 
+## 2026-11-20r1
+
+- **The web page shows when its readings are stale.** If the board hasn't
+  answered for about 6 seconds, the pump state badge turns into a grey dashed
+  "last: Idle" (or "last: Pump running"), the high-water badge reads "last: HIGH
+  WATER", the reading tiles and chart grey out, and the line under the title
+  says how long ago the last update was. Missed polls leave a gap in the
+  vibration chart. Everything returns to normal on the next answer.
+- Each status request now gives up after 4 seconds, and the next one starts 2
+  seconds after the previous one finishes, so requests no longer pile up
+  while the board is unreachable.
+
 ## 2026-11-19r5
 
 - **The network name follows the device name**, as on the Device Monitor: a
