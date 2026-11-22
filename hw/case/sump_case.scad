@@ -105,8 +105,8 @@ esp_usb_overhang = 23.9 - esp_l;   // shell sticks out 1.3 mm past the PCB at th
 esp_cx    = 11.25;           // board x of the U1 footprint centre; the module is assumed centred on its pins
 esp_far_x = esp_cx + esp_l / 2;    // board x of the module's far (non-USB) end: 22.55
 esp_end_clr = 0.5;           // H1 hook post is cut flat this far from the module's far end (it was 0.15 mm away)
-esp_top   = pcb_top + 7.1 - usb_h;  // module PCB top: Brad measured 7.1 mm from carrier top to the USB-C shell top (2026-11-22); was 3.74 + 3.2 = 6.94
 usb_h     = 3.2;
+esp_top   = pcb_top + 7.1 - usb_h;  // module PCB top: Brad measured 7.1 mm from carrier top to the USB-C shell top (2026-11-22); was 3.74 + 3.2 = 6.94
 usb_w     = 9;
 usb_margin = 0.4;
 usb_y     = bxy([0, 12])[1];
