@@ -394,7 +394,9 @@ over Wi-Fi with `pio run -e sump-ota -t upload --upload-port sump-east.local`.
 
 - **Live readings**, refreshed every 2 seconds: pump state, vibration, water
   depth, air temperature and humidity, Wi-Fi signal, and a chart of the last
-  few minutes of vibration against the two thresholds.
+  few minutes of vibration against the two thresholds. If the board stops
+  answering for about 6 seconds, the page greys these out and labels the pump
+  state "last: …", so an old "Idle" never looks current.
 - **Calibrate:** a guided measurement, **Measure idle (30 s)** with the pump
   off and **Measure running (30 s)** with it running, then **Use suggested
   thresholds** (see [Calibration](#calibration)). Below it, the passive
