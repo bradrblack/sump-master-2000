@@ -240,10 +240,7 @@ module tray() {
     // the USB end is a low stub wall up to the port's centre line; the lid's
     // end wall drops onto it, across the full width
     translate([-1, -1, floor_t + usb_zc]) cube([wall + fit + 1, out_w + 2, 50]);
-    // label on the long side wall (the y = 0 side), above the vents
-    translate([out_l / 2, 0.5, floor_t + 17.5])
-      rotate([90, 0, 0]) linear_extrude(1)
-        text("SUMP MASTER 2000", size = 5, halign = "center", valign = "center");
+    // (no side label: removed 2026-11-22 at Brad's request)
     // AHT20 side vents (no floor vents: the underside is solid)
     for (x = [aht_x[0] + 1 : vent_pitch : aht_x[1] - 1])
       translate([wall + x, -1, floor_t + 4]) cube([vent_w, out_w + 2, 7]);
