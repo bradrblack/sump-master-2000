@@ -71,7 +71,7 @@ fit       = 0.2;     // general FDM clearance
 pcb_l = 75.5; pcb_w = 24; pcb_t = 1.6;
 pcb_x0 = 0.3;                      // gap between the USB wall and the board's edge
 pcb_y0 = (in_w - pcb_w) / 2;
-standoff_h = 3;                    // floor to carrier underside (solder tails)
+standoff_h = 4.5;                  // floor to carrier underside: the ESP32 header tails stick out 3.8 mm (Brad, calipers 2026-11-22) + 0.7 clearance. Was 3, which the tails hit.
 pcb_top = standoff_h + pcb_t;
 // KiCad board coords (x right, y down) -> case coords
 function bxy(p) = [pcb_x0 + p[0], pcb_y0 + (pcb_w - p[1])];
@@ -84,8 +84,11 @@ holes = [
   [3.75,  8.0, 0],     // H5, under the ESP32 at the USB end: standoff + pin; the lid's
   [3.75, 16.0, 0],     // H6  USB tongue clamps the connector right above them
 ];
-pin_d   = 2.2;          // through the 2.5 mm holes
-pin_d_snug = 2.4;       // holes without a hook post (H3-H6) are press-fit
+pin_d   = 2.2;          // through the 2.5 mm holes: a slip fit at every hole. (Until 2026-11-19 H3-H6 were a
+                        // 2.4 mm press fit; PETG pins snapped off when Brad lifted the test board out.)
+pin_above = 0.4;        // straight pin above the carrier's top face, then a long taper: a short pin is less of a
+pin_tip_h = 1.0;        // lever when the board tilts coming off (was 1.2 straight + 0.6 taper)
+pin_tip_d = 1.2;
 boss_d  = 5;
 hook_gap = 0.3;          // hook post stops this far above the carrier
 // A hook post normally has a hollow tip that fits over the tray pin. Where the post
@@ -97,8 +100,13 @@ min_tip_wall = 0.8;
 function solid_post(h) = h[2] > 0 && (h[2] - hook_bore_d) / 2 < min_tip_wall;
 
 // ---------------- ESP32-C3 SuperMini USB-C ----------------
-esp_top   = pcb_top + 3.74;  // module PCB top (2.54 header spacer + 1.2 PCB), from the fan case
+esp_l     = 22.6;            // module PCB length (Brad, calipers 2026-11-22); 23.9 including the USB-C shell
+esp_usb_overhang = 23.9 - esp_l;   // shell sticks out 1.3 mm past the PCB at the USB end
+esp_cx    = 11.25;           // board x of the U1 footprint centre; the module is assumed centred on its pins
+esp_far_x = esp_cx + esp_l / 2;    // board x of the module's far (non-USB) end: 22.55
+esp_end_clr = 0.5;           // H1 hook post is cut flat this far from the module's far end (it was 0.15 mm away)
 usb_h     = 3.2;
+esp_top   = pcb_top + 7.1 - usb_h;  // module PCB top: Brad measured 7.1 mm from carrier top to the USB-C shell top (2026-11-22); was 3.74 + 3.2 = 6.94
 usb_w     = 9;
 usb_margin = 0.4;
 usb_y     = bxy([0, 12])[1];
@@ -115,13 +123,32 @@ module usb_port_cutter(depth) {
   translate([-1, wall + usb_y, floor_t + usb_zc]) hull()
     for (s = [-1, 1]) translate([0, s * (usb_port_w / 2 - r), 0]) rotate([0, 90, 0]) cylinder(r = r, h = depth);
 }
-// Button guide tunnel over RESET: user-measured 9 mm from the module's USB end and
-// 5 mm from its side: the right side with the USB port up, parts side up (board y 8).
-btn_xy    = bxy([9.0, 8.0]);
-btn_hole_d = 3;              // fits a toothpick / paperclip
-btn_tube_wall = 1;
-btn_top_above_esp = 2;       // tact switch height above the module PCB (guess, as in the fan case)
-btn_gap = 1;                 // tube stops this far above the button
+// RESET: centre 8.8 mm from the module's USB edge and 5.9 mm from its side edge (Brad's
+// micrometer, 2026-11-22, on the device-monitor case; was 9 / 5), module 17.7 mm wide,
+// centred on the carrier. The right side with the USB port up, parts side up (board y ~9).
+esp_w     = 17.7;
+btn_xy    = bxy([esp_far_x - esp_l + 8.8, 12 - esp_w / 2 + 5.9]);
+btn_top_above_esp = 2;       // tact switch height above the module PCB
+// Reset tab (from bradrblack/device-monitor slide_in_case.scad, replacing the old
+// toothpick tunnel): a tongue cut into the lid with a plunger under its round end.
+// Press the lid there to press RESET. Lessons carried over from that case:
+//  - the slot round the tongue is a U, open at the root, so the tongue stays joined
+//    to the lid (a closed ring left it loose and it snapped off);
+//  - the tongue is thinned from inside to 1.2 mm and ramps back to full lid
+//    thickness over 2.5 mm at the root, so the bend isn't at a sharp step;
+//  - the lid prints top down, so the 0.6 mm cut widens with a 45 deg chamfer to
+//    1.6 mm at the top face; otherwise the squashed first layers close it;
+//  - RESET position from calipers, not from the old guess (it sat ~1 mm off).
+tab_pad_d = 3.6;             // round end, over the button
+tab_w = 3;                   // tongue width
+tab_len = 12;                // button centre to the tongue's root (toward the back, +x)
+tab_t = 1.2;                 // tongue thickness: 6 layers at 0.2
+tab_ramp = 2.5;              // thinning ramps back to full thickness over this length at the root
+tab_slot = 0.6;              // cut around it
+tab_chamfer = 0.5;           // cut widens to tab_slot + 2 x this at the top face
+plunger_d = 3;               // stiffer than device-monitor's 2.4: this one is ~11 mm long
+btn_gap = 0.5;               // plunger tip above the button at rest
+plunger_z0 = esp_top + btn_top_above_esp + btn_gap;
 
 // ---------------- lid holes ----------------
 // A symmetric 5 mm grid centred on the lid. The middle strip along the length holds
@@ -160,14 +187,16 @@ sr_pin_d = 2.2;             // locating pins on two diagonal pads, through the S
 // Snap clips: arms hang from the lid beside the SR04's long edges and hook under its
 // parts-side face. Two per edge, near the ends, clear of the bent header pins.
 sr_clip_u = [8, sr_l - 8];  // clip centres along both long edges, clear of the header (keep clear of edge parts: MEASURE)
-clip_w = 6;                 // arm width along the edge
-clip_t = 0.8;               // arm thickness (flexes outward): two 0.4 mm perimeters
+clip_w = 8;                 // arm width along the edge (was 6)
+clip_t = 1.2;               // arm thickness at the hook (flexes outward): three 0.4 mm perimeters (was 0.8)
+clip_t_root = 1.8;          // ...thickening to this at the lid, outer face tapered, inner face straight
+clip_fillet = 1.2;          // 45 deg fillets where the arm meets the lid, both faces
+// (Until 2026-11-19 the arm was 0.8 mm and rooted in a relief groove with 0.6 mm of lid left above it;
+// PETG test prints broke at the root. Now it grows straight out of the full 2 mm lid.)
 clip_gap = 0.2;             // arm to board edge
 clip_hook = 0.4;            // how far the hook reaches under the board
-clip_relief = 1.4;          // blind groove into the lid's underside around each arm (0.6 mm skin left on top)
-clip_relief_gap = 0.6;      // groove width outside the arm and past its ends
-// Arm length from the groove bottom to the hook: 1.4 + 4 + 1.6 = ~7 mm; bending 0.4 mm strains a
-// 0.8 mm arm about 1%, fine for PLA or PETG.
+// Arm length from the lid to the hook: 4 + 1.6 = 5.6 mm; bending 0.4 mm strains the 1.2 mm tip end
+// about 2%, and the thickened, filleted root takes the bend at much lower stress.
 clip_lead = 1.8;            // height of the hook's lead-in ramp
 jst_cu = sr_l / 2;          // probe socket 17.5 mm from each short edge (user-measured)
 jst_cv = sr_w / 2;          // 12 mm from each long edge (user-measured)
@@ -178,7 +207,7 @@ jst_slot = [8.5, 6.6];      // socket 7 x 4.5 + clearance; the plug must also pa
 aht_x = [pcb_x0 + 55.9, pcb_x0 + 70.9];   // AHT20 board span: 15 x 15, lying flat away from J2 (user-measured)
 aht_z = 2.5;                               // carrier top to the AHT20 board's underside (user-measured)
 cap_d = 7; cap_h = 12;                     // 470 uF caps (user-measured), 2.5 mm lead pitch
-gy_w = 9; gy_l = 20;                       // GY-346 (user-measured), lying flat from J1 toward the caps
+gy_w = 14; gy_l = 21;                      // GY-346 (user-measured 2026-11-13: 21 along the header, 14 across), lying flat from J1 toward the caps
 gy_z = 2.5;                                // soldered on its own header like the AHT20 (user, after bench testing)
 vent_w = 1.6; vent_pitch = 3.2;
 
@@ -211,10 +240,7 @@ module tray() {
     // the USB end is a low stub wall up to the port's centre line; the lid's
     // end wall drops onto it, across the full width
     translate([-1, -1, floor_t + usb_zc]) cube([wall + fit + 1, out_w + 2, 50]);
-    // label on the long side wall (the y = 0 side), above the vents
-    translate([out_l / 2, 0.5, floor_t + 17.5])
-      rotate([90, 0, 0]) linear_extrude(1)
-        text("SUMP MASTER 2000", size = 5, halign = "center", valign = "center");
+    // (no side label: removed 2026-11-22 at Brad's request)
     // AHT20 side vents (no floor vents: the underside is solid)
     for (x = [aht_x[0] + 1 : vent_pitch : aht_x[1] - 1])
       translate([wall + x, -1, floor_t + 4]) cube([vent_w, out_w + 2, 7]);
@@ -229,9 +255,9 @@ module tray() {
     p = bxy(h);
     translate([p[0], p[1], 0]) {
       cylinder(d = boss_d, h = standoff_h);
-      pin_top = solid_post(h) ? pcb_top - 0.9 : pcb_top + 1.2;   // short pin under a solid post
-      cylinder(d = h[2] > 0 ? pin_d : pin_d_snug, h = pin_top);
-      translate([0, 0, pin_top]) cylinder(d1 = h[2] > 0 ? pin_d : pin_d_snug, d2 = 1.4, h = 0.6);
+      pin_top = solid_post(h) ? pcb_top - 0.9 : pcb_top + pin_above;   // short pin under a solid post
+      cylinder(d = pin_d, h = pin_top);
+      translate([0, 0, pin_top]) cylinder(d1 = pin_d, d2 = solid_post(h) ? 1.6 : pin_tip_d, h = solid_post(h) ? 0.6 : pin_tip_h);
     }
   }
 }
@@ -304,11 +330,11 @@ module lid() {
         translate([p[0], p[1], pcb_top + hook_gap]) difference() {
           cylinder(d = h[2], h = in_h - pcb_top - hook_gap + 0.01);   // 0.01 into the ceiling: one solid
           if (!solid_post(h)) translate([0, 0, -1]) cylinder(d = hook_bore_d, h = 3.5);   // 1 mm clear above the pin tip
+          // flat on the side facing the SuperMini's far end (H1), so the post can't touch the module
+          esp_cut_x = pcb_x0 + esp_far_x + esp_end_clr - p[0];
+          if (esp_cut_x < h[2] / 2) translate([-50 + esp_cut_x, -50, -1]) cube([50, 100, 100]);
         }
       }
-      // button guide tube, hanging from the ceiling to just above the ESP's button
-      at_inner() translate([btn_xy[0], btn_xy[1], esp_top + btn_top_above_esp + btn_gap])
-        cylinder(d = btn_hole_d + 2 * btn_tube_wall, h = in_h - (esp_top + btn_top_above_esp + btn_gap) + 0.01);
       // SR04 stand-off pads (its back face rests on these), locating pins on two diagonal corners
       at_inner() for (i = [0, 1], j = [0, 1])
         translate(concat(srp([i ? sr_l - sr_hole_u : sr_hole_u, j ? sr_w - sr_hole_v : sr_hole_v]),
@@ -326,17 +352,45 @@ module lid() {
     // (the JST's two pins sit along the SR04's length, which now runs across the case)
     at_inner() translate(concat(srp([jst_cu, jst_cv]) - [jst_slot[1] / 2, jst_slot[0] / 2], [in_h - 1]))
       cube([jst_slot[1], jst_slot[0], lid_t + 2]);
-    // button tunnel bore
-    at_inner() translate([btn_xy[0], btn_xy[1], esp_top + btn_top_above_esp + btn_gap - 0.5])
-      cylinder(d = btn_hole_d, h = in_h + lid_t);
-    // relief grooves around the clip arms
-    at_inner() for (cu = sr_clip_u, side = [0, 1]) sr_clip_relief(cu, side);
+    // reset tab: U-shaped slot (open at the root), chamfered at the top face, and
+    // the tongue thinned from inside with a ramp back to full thickness at the root
+    at_inner() {
+      root_x = btn_xy[0] + tab_len;
+      translate([0, 0, in_h - 1]) linear_extrude(lid_t + 2) tab_slot_2d();
+      translate([0, 0, in_h + lid_t - tab_chamfer]) minkowski() {
+        linear_extrude(0.01) tab_slot_2d();
+        cylinder(r1 = 0, r2 = tab_chamfer + 0.01, h = tab_chamfer + 0.01, $fn = 12);
+      }
+      thin = lid_t - tab_t;
+      translate([0, 0, in_h - 0.01]) linear_extrude(thin + 0.01) intersection() {
+        tab_outline();
+        translate([0, -50]) square([root_x - tab_ramp, 100]);
+      }
+      hull() {
+        translate([root_x - tab_ramp - 0.01, btn_xy[1] - tab_w / 2, in_h - 0.01]) cube([0.01, tab_w, thin + 0.01]);
+        translate([root_x - 0.01, btn_xy[1] - tab_w / 2, in_h - 0.01]) cube([0.01, tab_w, 0.01]);
+      }
+    }
     // dimples and vent holes in the top
     lid_texture();
     // the tray's AHT20 side vents carry on through the skirts
     for (x = [aht_x[0] + 1 : vent_pitch : aht_x[1] - 1])
       translate([wall + x, -1, floor_t + 4]) cube([vent_w, out_w + 2, 7]);
   }
+  // reset plunger under the tab's round end, down to just above RESET
+  at_inner() translate([btn_xy[0], btn_xy[1], plunger_z0]) cylinder(d = plunger_d, h = in_h + lid_t - tab_t - plunger_z0 + 0.01);   // into the thinned tongue: one solid
+}
+module tab_slot_2d() {
+  root_x = btn_xy[0] + tab_len;
+  difference() {
+    offset(delta = tab_slot) tab_outline();
+    tab_outline();
+    translate([root_x, btn_xy[1] - tab_w / 2 - tab_slot - 1]) square([tab_slot + 1, tab_w + 2 * tab_slot + 2]);
+  }
+}
+module tab_outline() {
+  translate(btn_xy) circle(d = tab_pad_d);
+  translate([btn_xy[0], btn_xy[1] - tab_w / 2]) square([tab_len, tab_w]);
 }
 
 // One SR04 snap clip, in cavity coordinates, at position u along one of the SR04's long
@@ -350,29 +404,18 @@ module sr_clip(u, side) {
   arm_in = edge + dir * clip_gap;
   bot = board_bot - 0.05 - clip_lead;
   y = sr_y0 + u;
-  translate([side ? arm_in : arm_in - clip_t, y - clip_w / 2, bot])
-    cube([clip_t, clip_w, in_h + clip_relief - bot]);
-  translate([0, y + clip_w / 2, 0]) rotate([90, 0, 0]) linear_extrude(clip_w)
+  f = clip_fillet;
+  // profile in the x-z plane, extruded clip_w along y: tapered arm, root fillets both sides, hook + ramp
+  translate([0, y + clip_w / 2, 0]) rotate([90, 0, 0]) linear_extrude(clip_w) {
+    polygon([[arm_in, bot], [arm_in + dir * clip_t, bot],
+             [arm_in + dir * clip_t_root, in_h - f], [arm_in + dir * (clip_t_root + f), in_h + 0.01],
+             [arm_in - dir * f, in_h + 0.01], [arm_in, in_h - f]]);
     polygon([[arm_in, board_bot - 0.05], [arm_in - dir * (clip_gap + clip_hook), board_bot - 0.05], [arm_in, bot]]);
-}
-
-// Blind relief groove around a clip arm, open on its outer side and ends, so the arm's
-// root is up inside the lid (longer arm, gentler bend) while the lid top stays closed.
-module sr_clip_relief(u, side) {
-  edge = sr_x0 + (side ? sr_w : 0);
-  dir = side ? 1 : -1;
-  arm_in = edge + dir * clip_gap;
-  arm_out = arm_in + dir * clip_t;
-  g = clip_relief_gap;
-  y = sr_y0 + u;
-  x0 = min(arm_in, arm_out + dir * g); x1 = max(arm_in, arm_out + dir * g);
-  difference() {
-    translate([x0, y - clip_w / 2 - g, in_h - 0.01]) cube([x1 - x0, clip_w + 2 * g, clip_relief + 0.01]);
-    translate([min(arm_in, arm_out), y - clip_w / 2, in_h - 1]) cube([clip_t, clip_w, clip_relief + 2]);
   }
 }
+
 function clip_centres() = [for (cu = sr_clip_u, side = [0, 1])
-  [sr_x0 + (side ? sr_w + clip_gap + clip_t / 2 : -clip_gap - clip_t / 2), sr_y0 + cu]];
+  [sr_x0 + (side ? sr_w + clip_gap + clip_t_root / 2 : -clip_gap - clip_t_root / 2), sr_y0 + cu]];
 
 // Holes / dimples on the lid top (outer-shell coordinates), symmetric about both centre lines.
 module lid_texture() {
@@ -387,9 +430,13 @@ module lid_texture() {
   jst = o + srp([jst_cu, jst_cv]);
   function near(p, list, r) = len([for (q = list) if (norm(p - q) < r) 1]) > 0;
   clips = [for (c = clip_centres()) o + c];
-  function over_clip(p) = len([for (c = clips) if (abs(p[0] - c[0]) < 3.5 && abs(p[1] - c[1]) < clip_w / 2 + 3) 1]) > 0;
-  module hole(p) if (!over_clip(p)) translate([p[0], p[1], top - lid_t - 1]) cylinder(d = vent_hole_d, h = lid_t + 2, $fn = 24);
-  module dimple(p) if (!over_clip(p)) translate([p[0], p[1], top + dot_r - dot_depth]) sphere(r = dot_r, $fn = 16);
+  function over_clip(p) = len([for (c = clips) if (abs(p[0] - c[0]) < 4 && abs(p[1] - c[1]) < clip_w / 2 + 3) 1]) > 0;
+  // keep holes and dimples off the reset tab, its cut and chamfer, plus a 0.8 mm web
+  function over_tab(p, rr) = p[0] > btn[0] - tab_pad_d / 2 - tab_slot - tab_chamfer - rr - 0.8
+                          && p[0] < btn[0] + tab_len + rr + 0.8
+                          && abs(p[1] - btn[1]) < tab_pad_d / 2 + tab_slot + tab_chamfer + rr + 0.8;
+  module hole(p) if (!over_clip(p) && !over_tab(p, vent_hole_d / 2)) translate([p[0], p[1], top - lid_t - 1]) cylinder(d = vent_hole_d, h = lid_t + 2, $fn = 24);
+  module dimple(p) if (!over_clip(p) && !over_tab(p, dot_r)) translate([p[0], p[1], top + dot_r - dot_depth]) sphere(r = dot_r, $fn = 16);
   for (i = [0 : n_cols - 1]) {
     x = u0 + i * dot_spacing;
     if (hole_pattern == "rows2") {
@@ -399,7 +446,7 @@ module lid_texture() {
         p = [x, yc + k * dot_spacing];
         if (abs(k) > 1) {
           if (near(p, bosses, 4.5)) dimple(p); else hole(p);
-        } else if (norm(p - btn) > 3 && !(abs(p[0] - jst[0]) < jst_slot[1] / 2 + 2 && abs(p[1] - jst[1]) < jst_slot[0] / 2 + 2))
+        } else if (!(abs(p[0] - jst[0]) < jst_slot[1] / 2 + 2 && abs(p[1] - jst[1]) < jst_slot[0] / 2 + 2))
           dimple(p);
       }
     }
@@ -410,8 +457,8 @@ module lid_texture() {
 module dummies() {
   at_inner() {
     color("green") translate([pcb_x0, pcb_y0, standoff_h]) cube([pcb_l, pcb_w, pcb_t]);
-    color("royalblue") translate([pcb_x0, pcb_y0 + 3, pcb_top + 2.54]) cube([22.5, 18, 1.2]);
-    color("silver") translate([pcb_x0 - 1, usb_y - usb_w / 2, esp_top]) cube([7.5, usb_w, usb_h]);
+    color("royalblue") translate([pcb_x0 + esp_far_x - esp_l, pcb_y0 + 3, pcb_top + 2.54]) cube([esp_l, 18, 1.2]);
+    color("silver") translate([pcb_x0 + esp_far_x - esp_l - esp_usb_overhang, usb_y - usb_w / 2, esp_top]) cube([7.5, usb_w, usb_h]);
     color("orange") translate([pcb_x0 + 28.1 - 1.27, pcb_y0 + 12 - gy_l / 2, pcb_top + gy_z]) cube([gy_w, gy_l, 1.6]);
     // what each module sits on (from the KiCad footprint positions)
     color("black") {
