@@ -123,13 +123,32 @@ module usb_port_cutter(depth) {
   translate([-1, wall + usb_y, floor_t + usb_zc]) hull()
     for (s = [-1, 1]) translate([0, s * (usb_port_w / 2 - r), 0]) rotate([0, 90, 0]) cylinder(r = r, h = depth);
 }
-// Button guide tunnel over RESET: user-measured 9 mm from the module's USB end and
-// 5 mm from its side: the right side with the USB port up, parts side up (board y 8).
-btn_xy    = bxy([9.0, 8.0]);
-btn_hole_d = 3;              // fits a toothpick / paperclip
-btn_tube_wall = 1;
-btn_top_above_esp = 2;       // tact switch height above the module PCB (guess, as in the fan case)
-btn_gap = 1;                 // tube stops this far above the button
+// RESET: centre 8.8 mm from the module's USB edge and 5.9 mm from its side edge (Brad's
+// micrometer, 2026-11-22, on the device-monitor case; was 9 / 5), module 17.7 mm wide,
+// centred on the carrier. The right side with the USB port up, parts side up (board y ~9).
+esp_w     = 17.7;
+btn_xy    = bxy([esp_far_x - esp_l + 8.8, 12 - esp_w / 2 + 5.9]);
+btn_top_above_esp = 2;       // tact switch height above the module PCB
+// Reset tab (from bradrblack/device-monitor slide_in_case.scad, replacing the old
+// toothpick tunnel): a tongue cut into the lid with a plunger under its round end.
+// Press the lid there to press RESET. Lessons carried over from that case:
+//  - the slot round the tongue is a U, open at the root, so the tongue stays joined
+//    to the lid (a closed ring left it loose and it snapped off);
+//  - the tongue is thinned from inside to 1.2 mm and ramps back to full lid
+//    thickness over 2.5 mm at the root, so the bend isn't at a sharp step;
+//  - the lid prints top down, so the 0.6 mm cut widens with a 45 deg chamfer to
+//    1.6 mm at the top face; otherwise the squashed first layers close it;
+//  - RESET position from calipers, not from the old guess (it sat ~1 mm off).
+tab_pad_d = 3.6;             // round end, over the button
+tab_w = 3;                   // tongue width
+tab_len = 12;                // button centre to the tongue's root (toward the back, +x)
+tab_t = 1.2;                 // tongue thickness: 6 layers at 0.2
+tab_ramp = 2.5;              // thinning ramps back to full thickness over this length at the root
+tab_slot = 0.6;              // cut around it
+tab_chamfer = 0.5;           // cut widens to tab_slot + 2 x this at the top face
+plunger_d = 3;               // stiffer than device-monitor's 2.4: this one is ~11 mm long
+btn_gap = 0.5;               // plunger tip above the button at rest
+plunger_z0 = esp_top + btn_top_above_esp + btn_gap;
 
 // ---------------- lid holes ----------------
 // A symmetric 5 mm grid centred on the lid. The middle strip along the length holds
@@ -319,9 +338,6 @@ module lid() {
           if (esp_cut_x < h[2] / 2) translate([-50 + esp_cut_x, -50, -1]) cube([50, 100, 100]);
         }
       }
-      // button guide tube, hanging from the ceiling to just above the ESP's button
-      at_inner() translate([btn_xy[0], btn_xy[1], esp_top + btn_top_above_esp + btn_gap])
-        cylinder(d = btn_hole_d + 2 * btn_tube_wall, h = in_h - (esp_top + btn_top_above_esp + btn_gap) + 0.01);
       // SR04 stand-off pads (its back face rests on these), locating pins on two diagonal corners
       at_inner() for (i = [0, 1], j = [0, 1])
         translate(concat(srp([i ? sr_l - sr_hole_u : sr_hole_u, j ? sr_w - sr_hole_v : sr_hole_v]),
@@ -339,15 +355,45 @@ module lid() {
     // (the JST's two pins sit along the SR04's length, which now runs across the case)
     at_inner() translate(concat(srp([jst_cu, jst_cv]) - [jst_slot[1] / 2, jst_slot[0] / 2], [in_h - 1]))
       cube([jst_slot[1], jst_slot[0], lid_t + 2]);
-    // button tunnel bore
-    at_inner() translate([btn_xy[0], btn_xy[1], esp_top + btn_top_above_esp + btn_gap - 0.5])
-      cylinder(d = btn_hole_d, h = in_h + lid_t);
+    // reset tab: U-shaped slot (open at the root), chamfered at the top face, and
+    // the tongue thinned from inside with a ramp back to full thickness at the root
+    at_inner() {
+      root_x = btn_xy[0] + tab_len;
+      translate([0, 0, in_h - 1]) linear_extrude(lid_t + 2) tab_slot_2d();
+      translate([0, 0, in_h + lid_t - tab_chamfer]) minkowski() {
+        linear_extrude(0.01) tab_slot_2d();
+        cylinder(r1 = 0, r2 = tab_chamfer + 0.01, h = tab_chamfer + 0.01, $fn = 12);
+      }
+      thin = lid_t - tab_t;
+      translate([0, 0, in_h - 0.01]) linear_extrude(thin + 0.01) intersection() {
+        tab_outline();
+        translate([0, -50]) square([root_x - tab_ramp, 100]);
+      }
+      hull() {
+        translate([root_x - tab_ramp - 0.01, btn_xy[1] - tab_w / 2, in_h - 0.01]) cube([0.01, tab_w, thin + 0.01]);
+        translate([root_x - 0.01, btn_xy[1] - tab_w / 2, in_h - 0.01]) cube([0.01, tab_w, 0.01]);
+      }
+    }
     // dimples and vent holes in the top
     lid_texture();
     // the tray's AHT20 side vents carry on through the skirts
     for (x = [aht_x[0] + 1 : vent_pitch : aht_x[1] - 1])
       translate([wall + x, -1, floor_t + 4]) cube([vent_w, out_w + 2, 7]);
   }
+  // reset plunger under the tab's round end, down to just above RESET
+  at_inner() translate([btn_xy[0], btn_xy[1], plunger_z0]) cylinder(d = plunger_d, h = in_h + lid_t - tab_t - plunger_z0 + 0.01);   // into the thinned tongue: one solid
+}
+module tab_slot_2d() {
+  root_x = btn_xy[0] + tab_len;
+  difference() {
+    offset(delta = tab_slot) tab_outline();
+    tab_outline();
+    translate([root_x, btn_xy[1] - tab_w / 2 - tab_slot - 1]) square([tab_slot + 1, tab_w + 2 * tab_slot + 2]);
+  }
+}
+module tab_outline() {
+  translate(btn_xy) circle(d = tab_pad_d);
+  translate([btn_xy[0], btn_xy[1] - tab_w / 2]) square([tab_len, tab_w]);
 }
 
 // One SR04 snap clip, in cavity coordinates, at position u along one of the SR04's long
@@ -388,8 +434,12 @@ module lid_texture() {
   function near(p, list, r) = len([for (q = list) if (norm(p - q) < r) 1]) > 0;
   clips = [for (c = clip_centres()) o + c];
   function over_clip(p) = len([for (c = clips) if (abs(p[0] - c[0]) < 4 && abs(p[1] - c[1]) < clip_w / 2 + 3) 1]) > 0;
-  module hole(p) if (!over_clip(p)) translate([p[0], p[1], top - lid_t - 1]) cylinder(d = vent_hole_d, h = lid_t + 2, $fn = 24);
-  module dimple(p) if (!over_clip(p)) translate([p[0], p[1], top + dot_r - dot_depth]) sphere(r = dot_r, $fn = 16);
+  // keep holes and dimples off the reset tab, its cut and chamfer, plus a 0.8 mm web
+  function over_tab(p, rr) = p[0] > btn[0] - tab_pad_d / 2 - tab_slot - tab_chamfer - rr - 0.8
+                          && p[0] < btn[0] + tab_len + rr + 0.8
+                          && abs(p[1] - btn[1]) < tab_pad_d / 2 + tab_slot + tab_chamfer + rr + 0.8;
+  module hole(p) if (!over_clip(p) && !over_tab(p, vent_hole_d / 2)) translate([p[0], p[1], top - lid_t - 1]) cylinder(d = vent_hole_d, h = lid_t + 2, $fn = 24);
+  module dimple(p) if (!over_clip(p) && !over_tab(p, dot_r)) translate([p[0], p[1], top + dot_r - dot_depth]) sphere(r = dot_r, $fn = 16);
   for (i = [0 : n_cols - 1]) {
     x = u0 + i * dot_spacing;
     if (hole_pattern == "rows2") {
@@ -399,7 +449,7 @@ module lid_texture() {
         p = [x, yc + k * dot_spacing];
         if (abs(k) > 1) {
           if (near(p, bosses, 4.5)) dimple(p); else hole(p);
-        } else if (norm(p - btn) > 3 && !(abs(p[0] - jst[0]) < jst_slot[1] / 2 + 2 && abs(p[1] - jst[1]) < jst_slot[0] / 2 + 2))
+        } else if (!(abs(p[0] - jst[0]) < jst_slot[1] / 2 + 2 && abs(p[1] - jst[1]) < jst_slot[0] / 2 + 2))
           dimple(p);
       }
     }
